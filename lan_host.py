@@ -1,26 +1,10 @@
 #!/usr/bin/env python3
 # -*- coding: utf-8 -*-
 """
-مضيف Story Mode (LAN + أونلاين عام من غير VPN).
+مضيف Story Mode — أداء عالي + رومات مربوطة بالقائد.
 
   python lan_host.py
-
-المنفذ الافتراضي: 27100
-
-محلياً / Radmin:
-  شارك IP جهازك مع اللاعبين.
-
-أونلاين من أي مكان (من غير VPN):
-  1) شغّل:  python lan_host.py
-  2) في تيرمينال تاني:
-       cloudflared tunnel --url http://localhost:27100
-  3) انسخ الرابط اللي يطلع (مثل https://xxxx.trycloudflare.com)
-  4) اللاعبين يلصقوا نفس الرابط في خانة عنوان السيرفر داخل اللعبة
-
-تحميل cloudflared (مرة واحدة):
-  https://developers.cloudflare.com/cloudflare-one/connections/connect-apps/install-and-setup/installation/
-
-نسخة محسّنة: ThreadingHTTPServer + رسائل أكتر + استجابة أسرع
+  cloudflared tunnel --url http://localhost:27100
 """
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from urllib.parse import urlparse, parse_qs
@@ -31,10 +15,12 @@ import socket
 import os
 
 PORT = int(os.environ.get('STORY_PORT', '27100'))
-# room -> { messages: [{id, t, data}], seq }
 ROOMS = {}
 LOCK = threading.Lock()
-MAX_MSG = 800  # أكثر من قبل عشان pose السريع مايمسحش رسائل مهمة
+MAX_MSG = 150
+MAX_POSE_PLAYERS = 16
+HOST_TIMEOUT = 12.0   # seconds without host heartbeat → room gone
+ROOM_TTL = 30 * 60
 
 
 def local_ips():
@@ -62,11 +48,47 @@ def local_ips():
     return out or ['127.0.0.1']
 
 
+def ensure_room(room):
+    if room not in ROOMS:
+        ROOMS[room] = {
+            'seq': 0,
+            'messages': [],
+            'poses': {},
+            'meta': {
+                'name': room,
+                'host': '',
+                'host_id': '',
+                'players': 0,
+                'created': time.time(),
+                'updated': time.time(),
+                'host_beat': time.time(),
+                'playing': False,
+                'visible': True,
+            }
+        }
+    return ROOMS[room]
+
+
+def cleanup_rooms():
+    now = time.time()
+    dead = []
+    for k, r in list(ROOMS.items()):
+        m = r['meta']
+        # Host heartbeat expired → remove room entirely
+        if now - m.get('host_beat', 0) > HOST_TIMEOUT:
+            dead.append(k)
+            continue
+        if now - m.get('updated', 0) > ROOM_TTL:
+            dead.append(k)
+    for k in dead:
+        ROOMS.pop(k, None)
+
+
 class Handler(BaseHTTPRequestHandler):
     protocol_version = 'HTTP/1.1'
 
     def log_message(self, fmt, *args):
-        pass  # quiet
+        pass
 
     def _cors(self):
         self.send_header('Access-Control-Allow-Origin', '*')
@@ -92,8 +114,10 @@ class Handler(BaseHTTPRequestHandler):
 
     def do_GET(self):
         u = urlparse(self.path)
+
         if u.path in ('/', '/status'):
             with LOCK:
+                cleanup_rooms()
                 rooms = list(ROOMS.keys())
             self._json(200, {
                 'ok': True,
@@ -101,8 +125,36 @@ class Handler(BaseHTTPRequestHandler):
                 'port': PORT,
                 'ips': local_ips(),
                 'rooms': rooms,
-                'fast': True
+                'fast': True,
+                't': time.time()
             })
+            return
+
+        if u.path == '/rooms':
+            with LOCK:
+                cleanup_rooms()
+                now = time.time()
+                out = []
+                for code, r in ROOMS.items():
+                    m = r['meta']
+                    # Only list rooms whose host is alive (heartbeat)
+                    if now - m.get('host_beat', 0) > HOST_TIMEOUT:
+                        continue
+                    if not m.get('visible', True):
+                        continue
+                    out.append({
+                        'code': code,
+                        'host': m.get('host') or '',
+                        'players': m.get('players') or max(1, len(r.get('poses') or {})),
+                        'playing': bool(m.get('playing')),
+                        'updated': m.get('updated', 0),
+                    })
+                out.sort(key=lambda x: -x['updated'])
+            self._json(200, {'ok': True, 'rooms': out, 't': time.time()})
+            return
+
+        if u.path == '/ping':
+            self._json(200, {'ok': True, 't': time.time()})
             return
 
         if u.path == '/poll':
@@ -113,11 +165,25 @@ class Handler(BaseHTTPRequestHandler):
             except Exception:
                 since = 0
             with LOCK:
+                # If room was cleaned (host gone), tell client
                 if room not in ROOMS:
-                    ROOMS[room] = {'seq': 0, 'messages': []}
+                    self._json(200, {'ok': True, 'messages': [], 'poses': [], 'dead': True, 't': time.time()})
+                    return
                 r = ROOMS[room]
+                # host gone mid-session?
+                if time.time() - r['meta'].get('host_beat', 0) > HOST_TIMEOUT:
+                    del ROOMS[room]
+                    self._json(200, {'ok': True, 'messages': [], 'poses': [], 'dead': True, 't': time.time()})
+                    return
+                r['meta']['updated'] = time.time()
                 msgs = [m for m in r['messages'] if m['id'] > since]
-            self._json(200, {'ok': True, 'messages': msgs})
+                poses = list(r['poses'].values())
+            self._json(200, {
+                'ok': True,
+                'messages': msgs,
+                'poses': poses,
+                't': time.time()
+            })
             return
 
         self.send_response(404)
@@ -128,6 +194,8 @@ class Handler(BaseHTTPRequestHandler):
     def do_POST(self):
         u = urlparse(self.path)
         length = int(self.headers.get('Content-Length') or 0)
+        if length > 65536:
+            length = 65536
         raw = self.rfile.read(length) if length else b'{}'
         try:
             payload = json.loads(raw.decode('utf-8'))
@@ -138,26 +206,104 @@ class Handler(BaseHTTPRequestHandler):
             room = str(payload.get('room') or 'default').strip().lower()
             data = payload.get('data')
             with LOCK:
-                if room not in ROOMS:
-                    ROOMS[room] = {'seq': 0, 'messages': []}
-                r = ROOMS[room]
-                # Keep only LATEST pose per player — prevents lag after long sessions
-                if isinstance(data, dict) and data.get('type') == 'pose' and data.get('id'):
-                    pid = data.get('id')
-                    r['messages'] = [
-                        m for m in r['messages']
-                        if not (
-                            isinstance(m.get('data'), dict)
-                            and m['data'].get('type') == 'pose'
-                            and m['data'].get('id') == pid
-                        )
-                    ]
-                r['seq'] += 1
-                r['messages'].append({'id': r['seq'], 't': time.time(), 'data': data})
-                if len(r['messages']) > MAX_MSG:
-                    r['messages'] = r['messages'][-MAX_MSG:]
-                seq = r['seq']
-            self._json(200, {'ok': True, 'id': seq})
+                r = ensure_room(room)
+                r['meta']['updated'] = time.time()
+
+                is_pose = isinstance(data, dict) and data.get('type') == 'pose' and data.get('id')
+                is_host_msg = isinstance(data, dict) and (
+                    data.get('isHost') or
+                    (isinstance(data.get('id'), str) and str(data.get('id')).startswith('host_'))
+                )
+
+                # Host pose/heartbeat refreshes host_beat
+                if is_host_msg or (is_pose and isinstance(data.get('id'), str) and str(data.get('id')).startswith('host_')):
+                    r['meta']['host_beat'] = time.time()
+                    if data.get('name') and not r['meta'].get('host'):
+                        r['meta']['host'] = str(data.get('name'))[:32]
+                    if data.get('id'):
+                        r['meta']['host_id'] = str(data.get('id'))
+
+                if is_pose:
+                    pid = str(data.get('id'))
+                    r['seq'] += 1
+                    entry = {'id': r['seq'], 't': time.time(), 'data': data}
+                    r['poses'][pid] = entry
+                    if len(r['poses']) > MAX_POSE_PLAYERS:
+                        items = sorted(r['poses'].items(), key=lambda kv: kv[1].get('t', 0))
+                        r['poses'] = dict(items[-MAX_POSE_PLAYERS:])
+                    seq = r['seq']
+                    r['meta']['players'] = max(1, len(r['poses']))
+                else:
+                    if isinstance(data, dict) and data.get('type') == 'chat':
+                        chats = [m for m in r['messages'] if isinstance(m.get('data'), dict) and m['data'].get('type') == 'chat']
+                        if len(chats) > 30:
+                            drop_ids = set(m['id'] for m in chats[:-20])
+                            r['messages'] = [m for m in r['messages'] if m['id'] not in drop_ids]
+
+                    if isinstance(data, dict):
+                        t = data.get('type')
+                        if t == 'join':
+                            if data.get('isHost') or data.get('host'):
+                                r['meta']['host'] = str(data.get('name') or r['meta'].get('host') or '')[:32]
+                                r['meta']['host_id'] = str(data.get('clientId') or data.get('id') or r['meta'].get('host_id') or '')
+                                r['meta']['host_beat'] = time.time()
+                                r['meta']['visible'] = True
+                            elif data.get('name') and not r['meta'].get('host'):
+                                r['meta']['host'] = str(data.get('name'))[:32]
+                        if t == 'heartbeat' or t == 'hostbeat':
+                            r['meta']['host_beat'] = time.time()
+                            if data.get('name'):
+                                r['meta']['host'] = str(data.get('name'))[:32]
+                            r['meta']['visible'] = True
+                            r['meta']['players'] = int(data.get('players') or r['meta'].get('players') or 1)
+                        if t == 'start':
+                            r['meta']['playing'] = True
+                            r['meta']['host_beat'] = time.time()
+                        if t == 'leave' or t == 'exit':
+                            pid = str(data.get('id') or '')
+                            if pid:
+                                r['poses'].pop(pid, None)
+                            # Host left → delete room immediately
+                            if data.get('isHost') or (pid and pid == r['meta'].get('host_id')) or (pid.startswith('host_')):
+                                ROOMS.pop(room, None)
+                                self._json(200, {'ok': True, 'id': 0, 'closed': True, 't': time.time()})
+                                return
+                            r['meta']['players'] = max(0, len(r['poses']))
+
+                    r['seq'] += 1
+                    r['messages'].append({'id': r['seq'], 't': time.time(), 'data': data})
+                    if len(r['messages']) > MAX_MSG:
+                        r['messages'] = r['messages'][-MAX_MSG:]
+                    seq = r['seq']
+
+            self._json(200, {'ok': True, 'id': seq, 't': time.time()})
+            return
+
+        if u.path == '/roommeta':
+            room = str(payload.get('room') or 'default').strip().lower()
+            with LOCK:
+                if payload.get('close') or payload.get('delete'):
+                    ROOMS.pop(room, None)
+                    self._json(200, {'ok': True, 'closed': True})
+                    return
+                r = ensure_room(room)
+                m = r['meta']
+                if payload.get('host'):
+                    m['host'] = str(payload.get('host'))[:32]
+                if payload.get('host_id'):
+                    m['host_id'] = str(payload.get('host_id'))
+                if 'players' in payload:
+                    try:
+                        m['players'] = int(payload.get('players') or 0)
+                    except Exception:
+                        pass
+                if 'playing' in payload:
+                    m['playing'] = bool(payload.get('playing'))
+                if 'visible' in payload:
+                    m['visible'] = bool(payload.get('visible'))
+                m['host_beat'] = time.time()
+                m['updated'] = time.time()
+            self._json(200, {'ok': True})
             return
 
         self.send_response(404)
@@ -169,23 +315,19 @@ class Handler(BaseHTTPRequestHandler):
 def main():
     ips = local_ips()
     print('========================================')
-    print('  Story Mode — مضيف (LAN / أونلاين عام)')
+    print('  Story Mode — مضيف (رومات + نبض القائد)')
     print('========================================')
     print('المنفذ:', PORT)
-    print('عناوين IP محلية (LAN / Radmin):')
     for ip in ips:
         print('  →', ip)
-    print('')
-    print('للأونلاين من أي مكان (من غير VPN):')
-    print('  في تيرمينال آخر شغّل:')
-    print('    cloudflared tunnel --url http://localhost:%d' % PORT)
-    print('  ثم انسخ الرابط https://....trycloudflare.com')
-    print('  واللاعبين يلصقوه في خانة عنوان السيرفر.')
-    print('')
-    print('اترك هذه النافذة مفتوحة أثناء اللعب.')
+    print('أونلاين: cloudflared tunnel --url http://localhost:%d' % PORT)
     print('========================================')
     server = ThreadingHTTPServer(('0.0.0.0', PORT), Handler)
     server.daemon_threads = True
+    try:
+        server.request_queue_size = 64
+    except Exception:
+        pass
     try:
         server.serve_forever()
     except KeyboardInterrupt:

@@ -26,6 +26,10 @@
     lanSince: 0,
     lanPollTimer: null,
     useLan: false,
+    graphicsLevel: 3,
+    scaleMode: 'uniform', // uniform | axis
+    netPing: 0,
+    netPingBars: 3,
     paused: false,
     pauseSide: 'full', // full | left | right
     volume: 0.8,
@@ -129,12 +133,64 @@
   const scene = new THREE.Scene();
   scene.background = new THREE.Color(0x87ceeb);
   scene.fog = new THREE.Fog(0x87ceeb, 70, 180);
-  const renderer = new THREE.WebGLRenderer({ canvas: canvas, antialias: true });
+  const renderer = new THREE.WebGLRenderer({ canvas: canvas, antialias: true, powerPreference: 'high-performance' });
   renderer.setSize(window.innerWidth, window.innerHeight);
   renderer.setPixelRatio(Math.min(window.devicePixelRatio, 2));
   renderer.shadowMap.enabled = true;
   renderer.shadowMap.type = THREE.PCFSoftShadowMap;
   renderer.setScissorTest(false);
+
+  // ===== Graphics quality (1=حقير .. 5=أسطوري) =====
+  var _sunLightRef = null;
+  function applyGraphicsQuality(level) {
+    level = Math.max(1, Math.min(5, parseInt(level, 10) || 3));
+    state.graphicsLevel = level;
+    try { localStorage.setItem('sm_graphics', String(level)); } catch (e) {}
+    var dpr = window.devicePixelRatio || 1;
+    // 1 حقير: lowest res, no shadows, no AA — max FPS
+    // 2 منخفض: low res, basic shadows
+    // 3 متوسط: balanced
+    // 4 عالي: high
+    // 5 أسطوري: max quality
+    var cfg = {
+      1: { pr: 0.6, shadows: false, map: 512, soft: 0.55, softCast: false, type: THREE.BasicShadowMap },
+      2: { pr: 0.85, shadows: true, map: 512, soft: 0.75, softCast: true, type: THREE.BasicShadowMap },
+      3: { pr: Math.min(dpr, 1.25), shadows: true, map: 1024, soft: 1.0, sunCast: true, type: THREE.PCFShadowMap },
+      4: { pr: Math.min(dpr, 1.75), shadows: true, map: 2048, soft: 1.15, sunCast: true, type: THREE.PCFSoftShadowMap },
+      5: { pr: Math.min(dpr, 2), shadows: true, map: 4096, soft: 1.35, sunCast: true, type: THREE.PCFSoftShadowMap }
+    }[level];
+    renderer.setPixelRatio(cfg.pr);
+    renderer.shadowMap.enabled = cfg.shadows;
+    renderer.shadowMap.type = cfg.type;
+    if (_sunLightRef) {
+      _sunLightRef.castShadow = cfg.sunCast && cfg.shadows;
+      if (cfg.shadows) {
+        _sunLightRef.shadow.mapSize.set(cfg.map, cfg.map);
+        if (_sunLightRef.shadow.map) {
+          try { _sunLightRef.shadow.map.dispose(); } catch (e) {}
+          _sunLightRef.shadow.map = null;
+        }
+      }
+      _sunLightRef.intensity = 1.2 * (cfg.fog || 1); // keep readable
+    }
+    // slightly reduce ground/scene load on low
+    try {
+      if (typeof ground !== 'undefined' && ground && ground.material) {
+        ground.receiveShadow = cfg.shadows;
+      }
+    } catch (e) {}
+    var hints = {
+      1: 'الجرافيكس الحقير — أعلى فريمات لأضعف الأجهزة',
+      2: 'جرافيكس منخفض — أجهزة ضعيفة',
+      3: 'جرافيكس متوسط — توازن الشكل والأداء',
+      4: 'جرافيكس عالي — أجهزة قوية',
+      5: 'الجرافيكس الأسطوري — أقصى جودة'
+    };
+    var el = document.getElementById('graphics-hint');
+    if (el) el.textContent = hints[level] || '';
+    var sel = document.getElementById('set-graphics');
+    if (sel) sel.value = String(level);
+  }
 
   let buildCamera = new THREE.PerspectiveCamera(70, window.innerWidth / window.innerHeight, 0.1, 500);
   buildCamera.position.copy(state.flyPos);
@@ -142,6 +198,7 @@
   scene.add(new THREE.AmbientLight(0xffffff, 0.5));
   const sun = new THREE.DirectionalLight(0xfff5e0, 1.2);
   sun.position.set(40, 60, 30); sun.castShadow = true;
+  _sunLightRef = sun;
   sun.shadow.mapSize.set(2048, 2048);
   sun.shadow.camera.near = 1; sun.shadow.camera.far = 200;
   sun.shadow.camera.left = -60; sun.shadow.camera.right = 60;
@@ -1965,12 +2022,7 @@
       }
     }
 
-    // If already dragging selected object - click to place/fix
-    if (selectedBuildObj && isDraggingObj && objToolMode === 'move') {
-      isDraggingObj = false;
-      toast('تم التثبيت', 'success');
-      return;
-    }
+    // Gizmo handled on mousedown
 
     // Click on existing object to select
     var hitsObj = raycaster.intersectObjects(state.buildObjects, true);
@@ -1979,8 +2031,8 @@
       while (obj.parent && state.buildObjects.indexOf(obj) === -1) obj = obj.parent;
       if (state.buildObjects.indexOf(obj) !== -1) {
         selectBuildObject(obj);
-        isDraggingObj = true;
         objToolMode = 'move';
+        rebuildGizmo();
         return;
       }
     }
@@ -2023,25 +2075,73 @@
     mouse.y = -(e.clientY / window.innerHeight) * 2 + 1;
     raycaster.setFromCamera(mouse, buildCamera);
 
-    // Drag selected object
+    // Hover highlight on axes when not dragging
+    if (!gizmoDrag && selectedBuildObj && transformGizmo && (objToolMode === 'move' || objToolMode === 'scale')) {
+      var hAxis = pickGizmo(raycaster);
+      setGizmoHover(hAxis);
+    } else if (!gizmoDrag) {
+      setGizmoHover(null);
+    }
+
+    // Axis gizmo drag — click axis + drag along it (also accept buttons===0 with pointer capture fallback via grabbed flag)
+    if (gizmoDrag && gizmoDrag.grabbed && selectedBuildObj) {
+      var axis = gizmoDrag.axis;
+      // Mouse delta in NDC-ish pixels projected onto screen axis direction
+      var mx = (e.clientX - gizmoDrag.startX);
+      var my = -(e.clientY - gizmoDrag.startY); // screen y up
+      var sa = gizmoDrag.screenAxis || { x: 1, y: 0 };
+      var along = mx * sa.x + my * sa.y;
+      // Scale sensitivity by distance to object
+      var dist = buildCamera.position.distanceTo(gizmoDrag.startPos);
+      var sens = dist * 0.0025;
+      var moveAmt = along * sens;
+
+      if (gizmoDrag.mode === 'move') {
+        var pos = gizmoDrag.startPos.clone();
+        if (axis === 'x') pos.x += moveAmt;
+        else if (axis === 'y') pos.y += moveAmt;
+        else if (axis === 'z') pos.z += moveAmt;
+        selectedBuildObj.position.copy(pos);
+      } else if (gizmoDrag.mode === 'scale') {
+        var sc = gizmoDrag.startScale.clone();
+        var factor = 1 + along * 0.008;
+        factor = Math.max(0.05, Math.min(6, factor));
+        if (state.scaleMode === 'uniform') {
+          var nx = Math.max(0.15, Math.min(8, sc.x * factor));
+          selectedBuildObj.scale.set(nx, nx, nx);
+        } else {
+          if (axis === 'x') sc.x = Math.max(0.15, Math.min(8, sc.x * factor));
+          if (axis === 'y') sc.y = Math.max(0.15, Math.min(8, sc.y * factor));
+          if (axis === 'z') sc.z = Math.max(0.15, Math.min(8, sc.z * factor));
+          selectedBuildObj.scale.copy(sc);
+        }
+      }
+      syncGizmoTransform();
+      updateObjToolbarPos();
+      return;
+    }
+
+    // Legacy free drag on ground (optional when isDraggingObj)
     if (selectedBuildObj && isDraggingObj && objToolMode === 'move') {
       var hits = raycaster.intersectObject(ground);
       if (hits.length) {
-        selectedBuildObj.position.set(hits[0].point.x, 0, hits[0].point.z);
+        selectedBuildObj.position.set(hits[0].point.x, selectedBuildObj.position.y, hits[0].point.z);
+        syncGizmoTransform();
         updateObjToolbarPos();
       }
       return;
     }
-    // Rotate with mouse drag when in rotate mode - handled in mousemove with buttons
-    if (selectedBuildObj && objToolMode === 'rotate' && (e.buttons === 1)) {
+    if (selectedBuildObj && objToolMode === 'rotate' && (e.buttons === 1) && !gizmoDrag) {
       selectedBuildObj.rotation.y += e.movementX * 0.01;
       updateObjToolbarPos();
       return;
     }
-    if (selectedBuildObj && objToolMode === 'scale' && (e.buttons === 1)) {
+    // Fallback scale drag without axis (uniform) if no gizmo handle grabbed
+    if (selectedBuildObj && objToolMode === 'scale' && (e.buttons === 1) && !gizmoDrag && state.scaleMode === 'uniform') {
       var s = selectedBuildObj.scale.x + e.movementY * -0.01;
-      s = Math.max(0.3, Math.min(5, s));
+      s = Math.max(0.15, Math.min(8, s));
       selectedBuildObj.scale.set(s, s, s);
+      syncGizmoTransform();
       updateObjToolbarPos();
       return;
     }
@@ -2578,7 +2678,16 @@
     if (state.playType === 'online' && state.isHost) {
       var levelName = (levelId && state.levels[levelId]) ? state.levels[levelId].name : '';
       var startMsg = { type: 'start', levelId: levelId, levelName: levelName, roster: state.netRoster };
-      if (state.useLan) lanSend(startMsg);
+      if (state.useLan) {
+        lanSend(startMsg);
+        try {
+          fetch(lanBaseUrl() + '/roommeta', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ room: state.roomCode, host: state.playerName || 'القائد', players: (state.netRoster || []).length, playing: true })
+          });
+        } catch (e) {}
+      }
       else broadcastToAll(startMsg);
     }
     // send first poses quickly after start
@@ -2642,7 +2751,75 @@
       players[0].yaw -= e.movementX * sens0;
     }
   });
-  window.addEventListener('click', function (e) { if (state.mode === 'build' && !state.flyMode) onBuildClick(e); });
+  window.addEventListener('mousedown', function (e) {
+    if (state.mode !== 'build' || state.flyMode) return;
+    if (e.button !== 0) return;
+    if (e.target.closest && (e.target.closest('#obj-toolbar') || e.target.closest('.hierarchy-panel') || e.target.closest('.build-toolbar') || e.target.closest('.build-sidebar-wrap') || e.target.closest('.level-panel') || e.target.closest('#respawn-choice-panel'))) return;
+    mouse.x = (e.clientX / window.innerWidth) * 2 - 1;
+    mouse.y = -(e.clientY / window.innerHeight) * 2 + 1;
+    raycaster.setFromCamera(mouse, buildCamera);
+    if (selectedBuildObj && transformGizmo && (objToolMode === 'move' || objToolMode === 'scale')) {
+      var axisHit = pickGizmo(raycaster);
+      if (axisHit) {
+        e.preventDefault();
+        e.stopPropagation();
+        try { if (e.target && e.target.setPointerCapture) e.target.setPointerCapture(e.pointerId); } catch (err) {}
+        var origin = selectedBuildObj.position.clone();
+        var axisDir = new THREE.Vector3(
+          axisHit === 'x' ? 1 : 0,
+          axisHit === 'y' ? 1 : 0,
+          axisHit === 'z' ? 1 : 0
+        );
+        var hitPoint = null;
+        var hitsG = raycaster.intersectObject(transformGizmo, true);
+        if (hitsG.length) hitPoint = hitsG[0].point.clone();
+        gizmoDrag = {
+          axis: axisHit,
+          mode: objToolMode,
+          startX: e.clientX,
+          startY: e.clientY,
+          startPos: selectedBuildObj.position.clone(),
+          startScale: selectedBuildObj.scale.clone(),
+          origin: origin,
+          axisDir: axisDir,
+          startPointerDist: 0,
+          grabbed: true
+        };
+        if (hitPoint) {
+          var toHit = hitPoint.clone().sub(origin);
+          gizmoDrag.startPointerDist = toHit.dot(axisDir);
+        }
+        var cam = buildCamera;
+        var axisEnd = origin.clone().add(axisDir);
+        var a0 = origin.clone().project(cam);
+        var a1 = axisEnd.clone().project(cam);
+        gizmoDrag.screenAxis = new THREE.Vector2(a1.x - a0.x, a1.y - a0.y);
+        if (gizmoDrag.screenAxis.length() > 1e-6) gizmoDrag.screenAxis.normalize();
+        else gizmoDrag.screenAxis.set(1, 0);
+        setGizmoHover(axisHit);
+        document.body.style.cursor = 'grabbing';
+        return;
+      }
+    }
+  }, true);
+  window.addEventListener('click', function (e) {
+    if (state.mode === 'build' && !state.flyMode) {
+      // If we just finished a gizmo drag, ignore the click selection
+      if (state._gizmoJustDragged) {
+        state._gizmoJustDragged = false;
+        return;
+      }
+      onBuildClick(e);
+    }
+  });
+  window.addEventListener('mouseup', function () {
+    if (gizmoDrag && gizmoDrag.grabbed) {
+      state._gizmoJustDragged = true;
+      document.body.style.cursor = '';
+    }
+    gizmoDrag = null;
+    if (typeof setGizmoHover === 'function') setGizmoHover(null);
+  });
   window.addEventListener('gamepadconnected', function (e) {
     document.getElementById('gamepad-hint').textContent = 'دراعة: ' + e.gamepad.id + ' — اضغط ✕';
   });
@@ -2699,21 +2876,193 @@
     obj.userData._hlMats = saved;
   }
 
+
+  // ===== Transform Gizmo (move / scale axes) =====
+  var transformGizmo = null;
+  var gizmoDrag = null; // { axis, mode, startMouse, startPos, startScale }
+  var gizmoHoverAxis = null;
+
+  function makeAxisArrow(color, axis) {
+    var g = new THREE.Group();
+    g.userData.gizmoAxis = axis;
+    g.userData.isGizmo = true;
+    var mat = new THREE.MeshBasicMaterial({ color: color, depthTest: false, depthWrite: false, transparent: true, opacity: 0.98 });
+    mat.toneMapped = false;
+    var shaft = new THREE.Mesh(new THREE.CylinderGeometry(0.055, 0.055, 1.35, 10), mat);
+    var head = new THREE.Mesh(new THREE.ConeGeometry(0.16, 0.35, 12), mat.clone());
+    shaft.renderOrder = 1000;
+    head.renderOrder = 1000;
+    if (axis === 'x') {
+      shaft.rotation.z = -Math.PI / 2;
+      shaft.position.x = 0.7;
+      head.rotation.z = -Math.PI / 2;
+      head.position.x = 1.45;
+    } else if (axis === 'y') {
+      shaft.position.y = 0.7;
+      head.position.y = 1.45;
+    } else {
+      shaft.rotation.x = Math.PI / 2;
+      shaft.position.z = 0.7;
+      head.rotation.x = Math.PI / 2;
+      head.position.z = 1.45;
+    }
+    shaft.userData.gizmoAxis = axis;
+    shaft.userData.isGizmo = true;
+    head.userData.gizmoAxis = axis;
+    head.userData.isGizmo = true;
+    g.add(shaft);
+    g.add(head);
+    // fat invisible collider so mouse easy to grab
+    var pickMat = new THREE.MeshBasicMaterial({ visible: false });
+    var pick = new THREE.Mesh(new THREE.CylinderGeometry(0.45, 0.45, 2.2, 8), pickMat);
+    pick.rotation.copy(shaft.rotation);
+    pick.position.copy(shaft.position);
+    pick.userData.gizmoAxis = axis;
+    pick.userData.isGizmo = true;
+    g.add(pick);
+    return g;
+  }
+
+  function makeScaleHandle(color, axis) {
+    var g = new THREE.Group();
+    g.userData.gizmoAxis = axis;
+    g.userData.isGizmo = true;
+    var mat = new THREE.MeshBasicMaterial({ color: color, depthTest: false, depthWrite: false, transparent: true, opacity: 0.98 });
+    mat.toneMapped = false;
+    var box = new THREE.Mesh(new THREE.BoxGeometry(0.28, 0.28, 0.28), mat);
+    box.renderOrder = 1000;
+    if (axis === 'x') box.position.x = 1.25;
+    else if (axis === 'y') box.position.y = 1.25;
+    else box.position.z = 1.25;
+    box.userData.gizmoAxis = axis;
+    box.userData.isGizmo = true;
+    g.add(box);
+    var line = new THREE.Mesh(new THREE.CylinderGeometry(0.045, 0.045, 1.1, 8), mat.clone());
+    line.renderOrder = 1000;
+    if (axis === 'x') { line.rotation.z = -Math.PI / 2; line.position.x = 0.55; }
+    else if (axis === 'y') { line.position.y = 0.55; }
+    else { line.rotation.x = Math.PI / 2; line.position.z = 0.55; }
+    line.userData.gizmoAxis = axis;
+    line.userData.isGizmo = true;
+    g.add(line);
+    var pickMat = new THREE.MeshBasicMaterial({ visible: false });
+    var pick = new THREE.Mesh(new THREE.BoxGeometry(0.5, 0.5, 0.5), pickMat);
+    pick.position.copy(box.position);
+    pick.userData.gizmoAxis = axis;
+    pick.userData.isGizmo = true;
+    g.add(pick);
+    return g;
+  }
+
+  function disposeGizmo() {
+    if (!transformGizmo) return;
+    scene.remove(transformGizmo);
+    transformGizmo.traverse(function (c) {
+      if (c.geometry) c.geometry.dispose();
+      if (c.material) c.material.dispose();
+    });
+    transformGizmo = null;
+    gizmoDrag = null;
+    gizmoHoverAxis = null;
+    try { document.body.style.cursor = ''; } catch (e) {}
+  }
+
+  function rebuildGizmo() {
+    disposeGizmo();
+    if (!selectedBuildObj || state.mode !== 'build') return;
+    var mode = objToolMode || 'move';
+    if (mode !== 'move' && mode !== 'scale') return;
+    var root = new THREE.Group();
+    root.userData.isGizmo = true;
+    root.renderOrder = 999;
+    if (mode === 'move') {
+      root.add(makeAxisArrow(0xff3333, 'x'));
+      root.add(makeAxisArrow(0x33ff66, 'y'));
+      root.add(makeAxisArrow(0x3388ff, 'z'));
+    } else {
+      // scale
+      root.add(makeScaleHandle(0xff3333, 'x'));
+      root.add(makeScaleHandle(0x33ff66, 'y'));
+      root.add(makeScaleHandle(0x3388ff, 'z'));
+    }
+    transformGizmo = root;
+    scene.add(transformGizmo);
+    syncGizmoTransform();
+  }
+
+  function syncGizmoTransform() {
+    if (!transformGizmo || !selectedBuildObj) return;
+    transformGizmo.position.copy(selectedBuildObj.position);
+    // keep gizmo readable size relative to camera distance
+    var dist = buildCamera.position.distanceTo(selectedBuildObj.position);
+    var s = Math.max(0.85, Math.min(3.2, dist * 0.1));
+    transformGizmo.scale.set(s, s, s);
+  }
+
+  function pickGizmo(raycaster) {
+    if (!transformGizmo) return null;
+    var hits = raycaster.intersectObject(transformGizmo, true);
+    if (!hits.length) return null;
+    // nearest hit with axis
+    for (var i = 0; i < hits.length; i++) {
+      var o = hits[i].object;
+      var guard = 0;
+      while (o && !o.userData.gizmoAxis && guard++ < 8) o = o.parent;
+      if (o && o.userData.gizmoAxis) return o.userData.gizmoAxis;
+    }
+    return null;
+  }
+
+  function setGizmoHover(axis) {
+    if (!transformGizmo) { gizmoHoverAxis = null; return; }
+    if (gizmoHoverAxis === axis) return;
+    gizmoHoverAxis = axis;
+    transformGizmo.children.forEach(function (child) {
+      var ax = child.userData && child.userData.gizmoAxis;
+      var active = ax && axis && ax === axis;
+      child.traverse(function (c) {
+        if (!c.isMesh || !c.material || c.material.visible === false) return;
+        if (c.userData && c.userData.isGizmo && c.material.color) {
+          // restore base color from axis
+          var base = ax === 'x' ? 0xff3333 : (ax === 'y' ? 0x33ff66 : 0x3388ff);
+          if (active) {
+            c.material.color.setHex(0xffffff);
+            c.material.opacity = 1;
+            if (c.geometry && c.geometry.type === 'CylinderGeometry') {
+              // thicken shaft slightly via scale
+              c.scale.set(1.55, 1, 1.55);
+            } else if (c.geometry && (c.geometry.type === 'ConeGeometry' || c.geometry.type === 'BoxGeometry')) {
+              c.scale.set(1.35, 1.35, 1.35);
+            }
+          } else {
+            c.material.color.setHex(base);
+            c.material.opacity = 0.98;
+            c.scale.set(1, 1, 1);
+          }
+        }
+      });
+    });
+    document.body.style.cursor = axis ? 'grab' : '';
+  }
+
   function selectBuildObject(obj) {
     if (selectedBuildObj && selectedBuildObj !== obj) {
       clearObjectHighlight(selectedBuildObj);
     }
     selectedBuildObj = obj;
     selectedHierarchyObj = obj;
-    isDraggingObj = !!obj;
+    isDraggingObj = false;
     objToolMode = obj ? 'move' : null;
     if (obj) {
       setObjectHighlight(obj, true);
       showObjToolbar(obj);
+      rebuildGizmo();
     } else {
       hideObjToolbar();
+      disposeGizmo();
     }
     refreshHierarchy();
+    updateScaleModeButtons();
   }
 
   function showObjToolbar(obj) {
@@ -2744,6 +3093,19 @@
     tb.style.top = (y - 50) + 'px';
   }
 
+  function updateScaleModeButtons() {
+    var tb = document.getElementById('obj-toolbar');
+    if (!tb) return;
+    var show = objToolMode === 'scale';
+    tb.querySelectorAll('.scale-mode-btn').forEach(function (b) {
+      if (show) b.classList.remove('hidden');
+      else b.classList.add('hidden');
+      var act = b.getAttribute('data-action');
+      if (act === 'scale-uniform') b.classList.toggle('active', state.scaleMode === 'uniform');
+      if (act === 'scale-axis') b.classList.toggle('active', state.scaleMode === 'axis');
+    });
+  }
+
   function bindObjToolbar() {
     var tb = document.getElementById('obj-toolbar');
     if (!tb) return;
@@ -2753,6 +3115,7 @@
         var action = btn.getAttribute('data-action');
         if (!selectedBuildObj) return;
         if (action === 'delete') {
+          disposeGizmo();
           scene.remove(selectedBuildObj);
           state.buildObjects = state.buildObjects.filter(function (o) { return o !== selectedBuildObj; });
           selectBuildObject(null);
@@ -2761,12 +3124,29 @@
           toast('تم الحذف', 'success');
           return;
         }
+        if (action === 'scale-uniform') {
+          state.scaleMode = 'uniform';
+          updateScaleModeButtons();
+          toast('تكبير كلي (كل المحاور معاً)', 'info');
+          return;
+        }
+        if (action === 'scale-axis') {
+          state.scaleMode = 'axis';
+          updateScaleModeButtons();
+          toast('تكبير محاور (X / Y / Z منفصل)', 'info');
+          return;
+        }
         objToolMode = action;
-        isDraggingObj = (action === 'move');
+        isDraggingObj = false;
+        gizmoDrag = null;
         tb.querySelectorAll('button').forEach(function (b) {
-          b.classList.toggle('active', b.getAttribute('data-action') === action);
+          var a = b.getAttribute('data-action');
+          if (a === 'scale-uniform' || a === 'scale-axis') return;
+          b.classList.toggle('active', a === action);
         });
-        var labels = { move: 'وضع التحريك', rotate: 'وضع الدوران', scale: 'وضع التكبير' };
+        updateScaleModeButtons();
+        rebuildGizmo();
+        var labels = { move: 'وضع التحريك — اسحب الأسهم', rotate: 'وضع الدوران', scale: 'وضع التكبير — اسحب المقابض' };
         toast(labels[action] || action, 'info');
       };
     });
@@ -3102,8 +3482,18 @@
   document.getElementById('btn-leave-lobby').onclick = function () {
     if (state.playType === 'online' && state.myNetId) {
       var leaveMsg = { type: 'leave', id: state.myNetId, name: state.playerName || 'لاعب', isHost: !!state.isHost };
-      if (state.useLan) lanSend(leaveMsg);
-      else broadcastToAll(leaveMsg);
+      if (state.useLan) {
+        lanSend(leaveMsg);
+        if (state.isHost) {
+          try {
+            fetch(lanBaseUrl() + '/roommeta', {
+              method: 'POST',
+              headers: { 'Content-Type': 'application/json' },
+              body: JSON.stringify({ room: state.roomCode, close: true })
+            });
+          } catch (e) {}
+        }
+      } else broadcastToAll(leaveMsg);
     }
     stopLanPoll();
     if (state.peer) try { state.peer.destroy(); } catch (e) {}
@@ -3125,6 +3515,9 @@
         });
         if (navigator.sendBeacon) {
           navigator.sendBeacon(lanBaseUrl() + '/send', new Blob([payload], { type: 'application/json' }));
+          if (state.isHost) {
+            navigator.sendBeacon(lanBaseUrl() + '/roommeta', new Blob([JSON.stringify({ room: state.roomCode, close: true })], { type: 'application/json' }));
+          }
         }
       } catch (e) {}
     }
@@ -3244,6 +3637,31 @@
     var delta = rawDelta * (state.script.timeScale || 1);
     var gpInput = pollGamepad();
 
+    // FPS counter
+    state._fpsFrames = (state._fpsFrames || 0) + 1;
+    state._fpsAcc = (state._fpsAcc || 0) + rawDelta;
+    if (state._fpsAcc >= 0.4) {
+      var fps = Math.round(state._fpsFrames / state._fpsAcc);
+      state._fpsFrames = 0;
+      state._fpsAcc = 0;
+      var fpsNet = document.getElementById('fps-counter');
+      var fpsSolo = document.getElementById('fps-counter-solo');
+      var fpsHud = document.getElementById('fps-hud');
+      var netHud = document.getElementById('net-ping-hud');
+      var online = state.playType === 'online' && state.useLan && state._lanPollActive;
+      if (online) {
+        if (fpsNet) fpsNet.textContent = fps + ' FPS';
+        if (fpsHud) fpsHud.classList.add('hidden');
+        if (netHud) netHud.classList.remove('hidden');
+      } else {
+        if (fpsHud) {
+          fpsHud.classList.remove('hidden');
+          if (fpsSolo) fpsSolo.textContent = fps + ' FPS';
+        }
+        if (netHud) netHud.classList.add('hidden');
+      }
+    }
+
     if (state.mode === 'play') {
       // Per-player pause: only freeze the player who opened the menu
       var p0Paused = state.paused && (state.pauseOwner === 0 || state.pauseOwner === null && state.playType !== 'split');
@@ -3271,7 +3689,16 @@
         updateRemoteMeshes(delta);
         state.netPoseTimer = (state.netPoseTimer || 0) + rawDelta;
         // Steady pose rate — don't over-flood HTTP (was causing freeze after ~10s)
-        var poseInterval = state.useLan ? 0.04 : 0.033;
+        // Host يرسل بثبات؛ المنضم عالي البنح يقلل إرساله
+        var ping = state.netPing || 80;
+        var poseInterval;
+        if (!state.useLan) poseInterval = 0.033;
+        else if (state.isHost) {
+          poseInterval = (ping > 600) ? 0.07 : 0.04;
+        } else if (ping > 900) poseInterval = 0.18;
+        else if (ping > 500) poseInterval = 0.12;
+        else if (ping > 250) poseInterval = 0.07;
+        else poseInterval = 0.048;
         if (state.netPoseTimer >= poseInterval) {
           state.netPoseTimer = 0;
           sendMyPose();
@@ -3323,7 +3750,10 @@
       }
     } else if (state.mode === 'build') {
       if (state.flyMode) updateFlyCamera(rawDelta);
-      if (selectedBuildObj) updateObjToolbarPos();
+      if (selectedBuildObj) {
+        updateObjToolbarPos();
+        if (typeof syncGizmoTransform === 'function') syncGizmoTransform();
+      }
       renderer.setViewport(0, 0, window.innerWidth, window.innerHeight);
       renderer.render(scene, buildCamera);
     } else {
@@ -3418,13 +3848,15 @@
       try { state._lanAbort.abort(); } catch (e) {}
       state._lanAbort = null;
     }
+    if (typeof hidePingHud === 'function') hidePingHud();
   }
 
   function lanSend(data) {
     if (!state.useLan || !state.roomCode) return;
     // Limit in-flight sends so the browser doesn't queue hundreds of hung requests
     state._lanSendInflight = state._lanSendInflight || 0;
-    if (state._lanSendInflight > 6) return;
+    var maxInflight = (state.netPing > 800) ? 2 : ((state.netPing > 400) ? 3 : 5);
+    if (state._lanSendInflight > maxInflight) return;
     state._lanSendInflight++;
     fetch(lanBaseUrl() + '/send', {
       method: 'POST',
@@ -3438,6 +3870,39 @@
     });
   }
 
+  function updatePingHud(ms) {
+    state.netPing = ms;
+    var hud = document.getElementById('net-ping-hud');
+    var bars = document.getElementById('wifi-bars');
+    var label = document.getElementById('ping-ms');
+    if (!hud || !bars || !label) return;
+    if (!(state.playType === 'online' && state.useLan && state._lanPollActive)) {
+      hud.classList.add('hidden');
+      return;
+    }
+    hud.classList.remove('hidden');
+    // bars: 5 best ... 1 worst
+    var level = 1;
+    if (ms <= 60) level = 5;
+    else if (ms <= 100) level = 4;
+    else if (ms <= 160) level = 3;
+    else if (ms <= 250) level = 2;
+    else level = 1;
+    state.netPingBars = level;
+    bars.className = 'wifi-bars level-' + level;
+    if (level >= 4) bars.classList.add('color-green');
+    else if (level >= 2) bars.classList.add('color-orange');
+    else bars.classList.add('color-red');
+    label.textContent = (ms > 0 ? Math.round(ms) : '--') + ' ms';
+    label.style.color = level >= 4 ? '#30d158' : (level >= 2 ? '#f59e0b' : '#ff2d55');
+    label.style.fontSize = '0.85rem';
+  }
+
+  function hidePingHud() {
+    var hud = document.getElementById('net-ping-hud');
+    if (hud) hud.classList.add('hidden');
+  }
+
   function lanPollOnce() {
     if (!state.useLan || !state.roomCode || !state._lanPollActive) return;
     if (state._lanAbort) {
@@ -3447,15 +3912,16 @@
     state._lanAbort = ctrl;
     var url = lanBaseUrl() + '/poll?room=' + encodeURIComponent(state.roomCode) + '&since=' + (state.lanSince || 0);
     var finished = false;
+    var t0 = (typeof performance !== 'undefined' && performance.now) ? performance.now() : Date.now();
+    var watchdogMs = (state.netPing > 800) ? 3500 : ((state.netPing > 400) ? 2500 : 1500);
     var watchdog = setTimeout(function () {
       if (finished) return;
       finished = true;
       if (ctrl) try { ctrl.abort(); } catch (e) {}
-      // schedule next even if this one hung
       if (state._lanPollActive) {
-        state.lanPollTimer = setTimeout(lanPollOnce, 40);
+        state.lanPollTimer = setTimeout(lanPollOnce, 60);
       }
-    }, 1500);
+    }, watchdogMs);
 
     var opts = { cache: 'no-store' };
     if (ctrl) opts.signal = ctrl.signal;
@@ -3464,33 +3930,72 @@
       if (finished) return;
       finished = true;
       clearTimeout(watchdog);
+      var t1 = (typeof performance !== 'undefined' && performance.now) ? performance.now() : Date.now();
+      // EMA smooth ping so UI doesn't jump
+      var sample = t1 - t0;
+      state.netPing = state.netPing ? (state.netPing * 0.7 + sample * 0.3) : sample;
+      updatePingHud(state.netPing);
+
+      // Room closed (host left / timeout)
+      if (j && j.dead) {
+        if (!state.isHost) {
+          toast('القائد خرج — الروم اتقفل', 'error');
+          stopLanPoll();
+          clearRemoteMeshes && clearRemoteMeshes();
+          state.useLan = false;
+          state.netRoster = [];
+          state.myNetId = null;
+          showScreen('menu');
+          showUI('main-menu');
+        }
+        return;
+      }
+
       if (j && j.messages && j.messages.length) {
-        var latestPose = {};
-        var ordered = [];
         j.messages.forEach(function (m) {
           if (m.id > (state.lanSince || 0)) state.lanSince = m.id;
           if (!m.data) return;
           var d = m.data;
-          if (d.type === 'pose' && d.id) latestPose[d.id] = d;
-          else ordered.push(d);
-        });
-        ordered.forEach(function (d) {
+          if (d.type === 'pose') return;
           if (d.id && d.id === state.myNetId) {
-            if (d.type === 'pose' || d.type === 'custom' || d.type === 'leave') return;
+            if (d.type === 'custom' || d.type === 'leave') return;
           }
           if (d.type === 'start' && state.mode === 'play') return;
           handlePeerData(d, !!state.isHost, null);
         });
-        Object.keys(latestPose).forEach(function (pid) {
-          if (pid === state.myNetId) return;
-          handlePeerData(latestPose[pid], !!state.isHost, null);
+      }
+      if (j && j.poses && j.poses.length) {
+        j.poses.forEach(function (m) {
+          if (!m || !m.data) return;
+          if (m.id > (state.lanSince || 0)) state.lanSince = m.id;
+          var d = m.data;
+          if (d.id && d.id === state.myNetId) return;
+          handlePeerData(d, !!state.isHost, null);
         });
       }
-      // Sequential chain — never piles up intervals; always continues
+
+      // Host heartbeat keeps room visible in /rooms list
+      state._hostBeatTimer = (state._hostBeatTimer || 0) + 1;
+      if (state.isHost && state._hostBeatTimer % 8 === 0) {
+        lanSend({
+          type: 'hostbeat',
+          isHost: true,
+          id: state.myNetId,
+          name: state.playerName || 'القائد',
+          players: (state.netRoster || []).length || 1
+        });
+      }
+
       if (state._lanPollActive) {
-        var delay = (state.mode === 'play') ? 30 : 50;
-        // Background tabs get throttled by Chrome — still try
-        if (typeof document !== 'undefined' && document.hidden) delay = 100;
+        // Adaptive poll: high ping → poll slower to avoid stacking requests
+        var ping = state.netPing || 80;
+        var delay;
+        if (ping > 600) delay = 80;
+        else if (ping > 300) delay = 50;
+        else if (state.isHost) delay = 25;
+        else delay = 32;
+        if (state.mode !== 'play') delay = Math.max(delay, 50);
+        if (typeof document !== 'undefined' && document.hidden) delay = Math.max(delay, 100);
         state.lanPollTimer = setTimeout(lanPollOnce, delay);
       }
     }).catch(function () {
@@ -3498,7 +4003,8 @@
       finished = true;
       clearTimeout(watchdog);
       if (state._lanPollActive) {
-        state.lanPollTimer = setTimeout(lanPollOnce, 80);
+        var delay = (state.netPing > 500) ? 120 : 80;
+        state.lanPollTimer = setTimeout(lanPollOnce, delay);
       }
     });
   }
@@ -3652,7 +4158,6 @@
     if (!d || d.id === state.myNetId) return;
     var mesh = ensureRemoteMesh(d.id, d.custom, d.name);
     if (!mesh) return;
-    // refresh clothes if custom changed
     if (d.custom && mesh.userData._customKey !== JSON.stringify(d.custom)) {
       var pos = mesh.position.clone();
       var rot = mesh.rotation.y;
@@ -3670,16 +4175,30 @@
       attachNameTag(mesh, d.name, true);
     }
     if (!state.remoteTargets) state.remoteTargets = {};
+    var prev = state.remoteTargets[d.id];
+    var nowT = (typeof performance !== 'undefined' && performance.now) ? performance.now() : Date.now();
+    // velocity from message or estimate from previous target
+    var vx = (d.vx != null) ? d.vx : 0;
+    var vz = (d.vz != null) ? d.vz : 0;
+    if (prev && prev._t) {
+      var dt = Math.max(0.016, (nowT - prev._t) / 1000);
+      if (d.vx == null) vx = (d.x - prev.x) / dt;
+      if (d.vz == null) vz = (d.z - prev.z) / dt;
+      // clamp crazy spikes from lag spikes
+      var spd = Math.sqrt(vx * vx + vz * vz);
+      if (spd > 25) { vx *= 25 / spd; vz *= 25 / spd; }
+    }
     state.remoteTargets[d.id] = {
       x: d.x, y: d.y || 0, z: d.z,
       yaw: (d.yaw || 0) + Math.PI,
       moving: !!d.moving,
+      vx: vx, vz: vz, vy: d.vy || 0,
+      _t: nowT,
       inVehicle: !!d.inVehicle,
       vehicleName: d.vehicleName || null,
       vehicleX: d.vehicleX, vehicleY: d.vehicleY, vehicleZ: d.vehicleZ,
       vehicleYaw: d.vehicleYaw
     };
-    // sync vehicle transform so other player sees the car move
     if (d.inVehicle && d.vehicleName) {
       for (var i = 0; i < state.buildObjects.length; i++) {
         var o = state.buildObjects[i];
@@ -3699,22 +4218,38 @@
   function updateRemoteMeshes(delta) {
     if (!state.remoteTargets) return;
     var ids = Object.keys(state.remoteTargets);
+    var ping = state.netPing || 100;
+    // With high ping, blend slower + extrapolate more so motion stays smooth
+    var lagSec = Math.min(0.8, (ping / 1000) * 0.45);
+    var followRate = ping > 400 ? 8 : (ping > 200 ? 14 : 22);
+    var snapDist2 = ping > 400 ? 36 : 16; // only snap if very far
+    var nowT = (typeof performance !== 'undefined' && performance.now) ? performance.now() : Date.now();
     for (var i = 0; i < ids.length; i++) {
       var id = ids[i];
       var mesh = state.remoteMeshes[id];
       var t = state.remoteTargets[id];
       if (!mesh || !t) continue;
-      var dx = t.x - mesh.position.x;
-      var dy = t.y - mesh.position.y;
-      var dz = t.z - mesh.position.z;
+      // Extrapolate target forward using velocity (dead reckoning)
+      var age = t._t ? Math.min(1.4, (nowT - t._t) / 1000) : 0;
+      // damp velocity over time so we don't fly forever on stale data
+      var damp = age > 0.5 ? Math.max(0.15, 1 - (age - 0.5) * 1.2) : 1;
+      var ex = t.x + (t.vx || 0) * (age * damp + lagSec * 0.55);
+      var ey = t.y;
+      var ez = t.z + (t.vz || 0) * (age * damp + lagSec * 0.55);
+      var dx = ex - mesh.position.x;
+      var dy = ey - mesh.position.y;
+      var dz = ez - mesh.position.z;
       var dist2 = dx * dx + dy * dy + dz * dz;
-      // snap if far; otherwise follow quickly (avoids looking frozen)
-      if (dist2 > 4) {
-        mesh.position.set(t.x, t.y, t.z);
+      if (dist2 > snapDist2) {
+        // soft catch-up instead of hard teleport when laggy
+        var catchUp = Math.min(1, 0.35);
+        mesh.position.x += dx * catchUp;
+        mesh.position.y += dy * catchUp;
+        mesh.position.z += dz * catchUp;
       } else {
-        var lerp = Math.min(1, 35 * delta);
+        var lerp = Math.min(1, followRate * delta);
         mesh.position.x += dx * lerp;
-        mesh.position.y += dy * Math.min(1, 45 * delta);
+        mesh.position.y += dy * Math.min(1, (followRate + 10) * delta);
         mesh.position.z += dz * lerp;
       }
       var cy = mesh.rotation.y;
@@ -3722,8 +4257,7 @@
       var dYaw = ty - cy;
       while (dYaw > Math.PI) dYaw -= Math.PI * 2;
       while (dYaw < -Math.PI) dYaw += Math.PI * 2;
-      mesh.rotation.y = cy + dYaw * Math.min(1, 30 * delta);
-      // walk anim if moving
+      mesh.rotation.y = cy + dYaw * Math.min(1, 12 * delta);
       if (t.moving && mesh.userData && mesh.userData.leftArm) {
         mesh.userData.walkCycle = (mesh.userData.walkCycle || 0) + delta * 10;
         var s = Math.sin(mesh.userData.walkCycle) * 0.5;
@@ -3757,16 +4291,26 @@
       state._lastSentCustomKey = customKey;
       sendCustom = custom;
     }
-    // compact pose — fewer fields = less JSON parse time on LAN bus
+    // compact pose + velocity for high-ping extrapolation
+    var px = p.group.position.x, py = p.group.position.y, pz = p.group.position.z;
+    var prev = state._lastPosePos || { x: px, y: py, z: pz, t: 0 };
+    var nowP = (typeof performance !== 'undefined' && performance.now) ? performance.now() : Date.now();
+    var dtP = Math.max(0.016, (nowP - (prev.t || nowP)) / 1000);
+    var vx = (px - prev.x) / dtP;
+    var vz = (pz - prev.z) / dtP;
+    state._lastPosePos = { x: px, y: py, z: pz, t: nowP };
     var msg = {
       type: 'pose',
       id: state.myNetId,
-      x: Math.round(p.group.position.x * 100) / 100,
-      y: Math.round(p.group.position.y * 100) / 100,
-      z: Math.round(p.group.position.z * 100) / 100,
+      x: Math.round(px * 100) / 100,
+      y: Math.round(py * 100) / 100,
+      z: Math.round(pz * 100) / 100,
       yaw: Math.round(p.yaw * 1000) / 1000,
-      moving: moving
+      moving: moving,
+      vx: Math.round(vx * 100) / 100,
+      vz: Math.round(vz * 100) / 100
     };
+    if (state.isHost) msg.isHost = true;
     // name only occasionally (every ~1s) to save bandwidth
     state._nameTick = (state._nameTick || 0) + 1;
     if (state._nameTick === 1 || state._nameTick % 40 === 0) {
@@ -3781,6 +4325,22 @@
       msg.vehicleYaw = Math.round(p.vehicle.rotation.y * 1000) / 1000;
     }
     if (sendCustom) msg.custom = sendCustom;
+    // High-ping sacrifice: skip tiny movements to cut traffic
+    if (state.useLan && (state.netPing || 0) > 400) {
+      var lp = state._lastSentPose;
+      if (lp) {
+        var ddx = msg.x - lp.x, ddz = msg.z - lp.z;
+        var dyaw = Math.abs((msg.yaw || 0) - (lp.yaw || 0));
+        var minMove = (state.netPing > 800) ? 0.35 : 0.18;
+        if (ddx * ddx + ddz * ddz < minMove * minMove && dyaw < 0.08 && !msg.inVehicle) {
+          // still heartbeat occasionally
+          state._poseSkip = (state._poseSkip || 0) + 1;
+          if (state._poseSkip < 4) return;
+        }
+      }
+      state._poseSkip = 0;
+      state._lastSentPose = { x: msg.x, z: msg.z, yaw: msg.yaw };
+    }
     if (state.useLan) {
       lanSend(msg);
     } else if (state.isHost) {
@@ -4143,11 +4703,10 @@
 
   var btnOnline = document.getElementById('btn-online-mode');
   if (btnOnline) btnOnline.onclick = function () {
-    showUI('online-confirm');
-    var ipEl = document.getElementById('confirm-server-ip');
-    // auto-check current field (localhost for host, or previously used IP)
-    var ip = (ipEl && ipEl.value) ? ipEl.value.trim() : '127.0.0.1';
-    runServerCheck(ip);
+    // مباشرة للـ hub — اختيار LAN / كلاودفير داخل إنشاء أو انضمام
+    showUI('online-hub');
+    var hub = document.getElementById('hub-server-status');
+    if (hub) hub.textContent = 'القائد يشغّل: python lan_host.py — LAN بدون نت أو كلاودفير للإنترنت';
   };
 
   var btnCheckServer = document.getElementById('btn-check-server');
@@ -4179,23 +4738,117 @@
   var btnOnlineHubBack = document.getElementById('btn-online-hub-back');
   if (btnOnlineHubBack) btnOnlineHubBack.onclick = function () { showUI('story-choice'); };
 
+  // ---- Create room: LAN vs Cloud mode ----
+  state._createNetMode = null; // 'lan' | 'cloud'
+  state._joinNetMode = null;
+
+  function setCreateNetMode(mode) {
+    state._createNetMode = mode;
+    var lanP = document.getElementById('create-lan-panel');
+    var cloudP = document.getElementById('create-cloud-panel');
+    var btnLan = document.getElementById('btn-create-mode-lan');
+    var btnCloud = document.getElementById('btn-create-mode-cloud');
+    var doBtn = document.getElementById('btn-do-create');
+    if (lanP) lanP.classList.toggle('hidden', mode !== 'lan');
+    if (cloudP) cloudP.classList.toggle('hidden', mode !== 'cloud');
+    if (btnLan) {
+      btnLan.classList.toggle('btn-success', mode === 'lan');
+      btnLan.classList.toggle('btn-ghost', mode !== 'lan');
+    }
+    if (btnCloud) {
+      btnCloud.classList.toggle('btn-accent', mode === 'cloud');
+      btnCloud.classList.toggle('btn-ghost', mode !== 'cloud');
+    }
+    if (doBtn) {
+      doBtn.disabled = false;
+      doBtn.textContent = mode === 'lan' ? 'تأكيد وإنشاء (LAN)' : 'تأكيد وإنشاء (كلاودفير)';
+    }
+    if (mode === 'lan') {
+      var ipEl = document.getElementById('create-ip-input');
+      if (ipEl && (!ipEl.value || ipEl.value === '')) ipEl.value = '127.0.0.1';
+      // try detect local IP hint from previous check
+      var hint = document.getElementById('create-lan-hint');
+      if (hint && state._detectedLanIps && state._detectedLanIps.length) {
+        hint.textContent = 'IP جهازك المحتمل: ' + state._detectedLanIps.join(' · ') + ' — أعطِه لصحابك على نفس الشبكة';
+      }
+    }
+  }
+
+  function setJoinNetMode(mode) {
+    state._joinNetMode = mode;
+    var lanP = document.getElementById('join-lan-panel');
+    var cloudP = document.getElementById('join-cloud-panel');
+    var btnLan = document.getElementById('btn-join-mode-lan');
+    var btnCloud = document.getElementById('btn-join-mode-cloud');
+    if (lanP) lanP.classList.toggle('hidden', mode !== 'lan');
+    if (cloudP) cloudP.classList.toggle('hidden', mode !== 'cloud');
+    if (btnLan) {
+      btnLan.classList.toggle('btn-success', mode === 'lan');
+      btnLan.classList.toggle('btn-ghost', mode !== 'lan');
+    }
+    if (btnCloud) {
+      btnCloud.classList.toggle('btn-accent', mode === 'cloud');
+      btnCloud.classList.toggle('btn-ghost', mode !== 'cloud');
+    }
+  }
+
+  // زر الجرافيكس في القائمة الرئيسية
+  var btnMenuGfx = document.getElementById('btn-menu-graphics');
+  if (btnMenuGfx) btnMenuGfx.onclick = function () {
+    var sel = document.getElementById('set-graphics');
+    if (sel) sel.value = String(state.graphicsLevel || 3);
+    var hint = document.getElementById('graphics-hint');
+    if (hint && sel) {
+      var hints = {
+        1: 'الجرافيكس الحقير — أعلى فريمات لأضعف الأجهزة',
+        2: 'جرافيكس منخفض — أجهزة ضعيفة',
+        3: 'جرافيكس متوسط — توازن الشكل والأداء',
+        4: 'جرافيكس عالي — أجهزة قوية',
+        5: 'الجرافيكس الأسطوري — أقصى جودة'
+      };
+      hint.textContent = hints[parseInt(sel.value, 10)] || '';
+    }
+    var sp = document.getElementById('settings-panel');
+    if (sp) sp.classList.remove('hidden');
+    // لو مش في pause، رجوع يخفي فقط
+  };
+
+  var btnCreateModeLan = document.getElementById('btn-create-mode-lan');
+  if (btnCreateModeLan) btnCreateModeLan.onclick = function () { setCreateNetMode('lan'); };
+  var btnCreateModeCloud = document.getElementById('btn-create-mode-cloud');
+  if (btnCreateModeCloud) btnCreateModeCloud.onclick = function () { setCreateNetMode('cloud'); };
+  var btnJoinModeLan = document.getElementById('btn-join-mode-lan');
+  if (btnJoinModeLan) btnJoinModeLan.onclick = function () { setJoinNetMode('lan'); };
+  var btnJoinModeCloud = document.getElementById('btn-join-mode-cloud');
+  if (btnJoinModeCloud) btnJoinModeCloud.onclick = function () { setJoinNetMode('cloud'); };
+
   var btnOnlineCreate = document.getElementById('btn-online-create');
   if (btnOnlineCreate) btnOnlineCreate.onclick = function () {
+    state._createNetMode = null;
+    setCreateNetMode(null);
+    // reset panels
+    var lanP = document.getElementById('create-lan-panel');
+    var cloudP = document.getElementById('create-cloud-panel');
+    if (lanP) lanP.classList.add('hidden');
+    if (cloudP) cloudP.classList.add('hidden');
+    var doBtn = document.getElementById('btn-do-create');
+    if (doBtn) { doBtn.disabled = true; doBtn.textContent = 'اختر LAN أو كلاودفير أولاً'; }
     showUI('create-room');
-    var ipEl = document.getElementById('create-ip-input');
-    if (ipEl && state._detectedLanIps && state._detectedLanIps.length) {
-      // prefer first non-empty detected IP
-      ipEl.value = state._detectedLanIps[0];
-    }
+    // quick probe localhost to fill detected IPs for LAN hint
+    checkLanServer('127.0.0.1', function (ok, info) {
+      if (ok && info && info.ips) state._detectedLanIps = info.ips;
+    });
   };
 
   var btnOnlineJoin = document.getElementById('btn-online-join');
   if (btnOnlineJoin) btnOnlineJoin.onclick = function () {
+    state._joinNetMode = null;
+    setJoinNetMode(null);
+    var lanP = document.getElementById('join-lan-panel');
+    var cloudP = document.getElementById('join-cloud-panel');
+    if (lanP) lanP.classList.add('hidden');
+    if (cloudP) cloudP.classList.add('hidden');
     showUI('join-room');
-    var ipEl = document.getElementById('join-ip-input');
-    if (ipEl && state._detectedLanIps && state._detectedLanIps.length && (!ipEl.value || ipEl.value === '127.0.0.1')) {
-      ipEl.value = state._detectedLanIps[0];
-    }
   };
 
   var btnCreateBack = document.getElementById('btn-create-back');
@@ -4431,46 +5084,146 @@
       }, 200);
     } else {
       toast('لوبي السيرفر جاهز — أونلاين عام أو LAN', 'success');
+      try {
+        fetch(lanBaseUrl() + '/roommeta', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ room: code, host: state.playerName || 'القائد', host_id: state.myNetId, players: 1, playing: false, visible: true })
+        });
+      lanSend({ type: 'hostbeat', isHost: true, id: state.myNetId, name: state.playerName || 'القائد', players: 1 });
+      } catch (e) {}
     }
   }
 
   var btnDoCreate = document.getElementById('btn-do-create');
   if (btnDoCreate) btnDoCreate.onclick = function () {
     var code = (document.getElementById('create-code-input').value || '').trim().toLowerCase().replace(/\s+/g, '');
-    var ip = (document.getElementById('create-ip-input') && document.getElementById('create-ip-input').value || '127.0.0.1').trim();
+    var mode = state._createNetMode;
+    if (!mode) { toast('اختر LAN أو كلاودفير أولاً', 'error'); return; }
+    var ip = '';
+    if (mode === 'lan') {
+      ip = (document.getElementById('create-ip-input') && document.getElementById('create-ip-input').value || '127.0.0.1').trim();
+    } else {
+      ip = (document.getElementById('create-cloud-input') && document.getElementById('create-cloud-input').value || '').trim();
+    }
     if (!code || code.length < 2) { toast('اكتب رمز صالح', 'error'); return; }
-    if (!ip) { toast('اكتب IP السيرفر', 'error'); return; }
+    if (!ip) { toast(mode === 'lan' ? 'اكتب IP المحلي' : 'الصق رابط الكلاودفير', 'error'); return; }
     if (!createZipReady) {
       toast('ارفع الملف الشامل أولاً', 'error');
       if (createUploadInput) createUploadInput.click();
       return;
     }
-    toast('جاري التحقق من السيرفر...', 'info');
-    checkLanServer(ip, function (ok) {
+    toast(mode === 'lan' ? 'جاري التحقق من سيرفر LAN...' : 'جاري التحقق من الكلاودفير...', 'info');
+    checkLanServer(ip, function (ok, info) {
       if (!ok) {
-        toast('السيرفر مش شغال — تأكد من python lan_host.py ورابط cloudflared', 'error');
+        if (mode === 'lan') {
+          toast('السيرفر مش شغال على LAN — شغّل: python lan_host.py على جهازك', 'error');
+        } else {
+          toast('السيرفر مش واصل — تأكد من python lan_host.py + cloudflared tunnel', 'error');
+        }
         return;
       }
-      // الأونلاين = LAN فقط عبر lan_host (مفيش PeerJS منفصل)
+      if (info && info.ips) state._detectedLanIps = info.ips;
       setupLanLobby(true, code, ip);
+      toast(mode === 'lan' ? 'لوبي LAN جاهز — أعطِ أصحابك IP جهازك والرمز' : 'لوبي كلاودفير جاهز — أعطِ الرابط والرمز', 'success');
     });
   };
+
+
+  // ===== Available rooms list (join) =====
+  var selectedListedRoom = null;
+  function setJoinTab(mode) {
+    var byCode = document.getElementById('join-by-code');
+    var byList = document.getElementById('join-by-list');
+    var tabCode = document.getElementById('btn-join-tab-code');
+    var tabList = document.getElementById('btn-join-tab-list');
+    if (!byCode || !byList) return;
+    if (mode === 'list') {
+      byCode.classList.add('hidden');
+      byList.classList.remove('hidden');
+      if (tabCode) { tabCode.classList.remove('btn-primary'); tabCode.classList.add('btn-ghost'); }
+      if (tabList) { tabList.classList.add('btn-primary'); tabList.classList.remove('btn-ghost'); }
+      refreshRoomsList();
+    } else {
+      byList.classList.add('hidden');
+      byCode.classList.remove('hidden');
+      if (tabList) { tabList.classList.remove('btn-primary'); tabList.classList.add('btn-ghost'); }
+      if (tabCode) { tabCode.classList.add('btn-primary'); tabCode.classList.remove('btn-ghost'); }
+    }
+  }
+  function getJoinServerAddress() {
+    if (state._joinNetMode === 'cloud') {
+      return (document.getElementById('join-cloud-input') && document.getElementById('join-cloud-input').value || '').trim();
+    }
+    return (document.getElementById('join-ip-input') && document.getElementById('join-ip-input').value || '').trim();
+  }
+
+  function refreshRoomsList() {
+    var list = document.getElementById('rooms-list');
+    var empty = document.getElementById('rooms-list-empty');
+    var ip = getJoinServerAddress() || '127.0.0.1';
+    if (!list) return;
+    list.innerHTML = '';
+    if (empty) empty.textContent = 'جاري التحميل...';
+    var base = normalizeLanHost(ip);
+    fetch(base + '/rooms', { cache: 'no-store' }).then(function (r) { return r.json(); }).then(function (j) {
+      list.innerHTML = '';
+      var rooms = (j && j.rooms) || [];
+      if (!rooms.length) {
+        if (empty) empty.textContent = 'مفيش رومات ظاهرة — تأكد إن القائد أنشأ لوبي والسيرفر شغال';
+        return;
+      }
+      if (empty) empty.textContent = '';
+      rooms.forEach(function (rm) {
+        var card = document.createElement('div');
+        card.className = 'room-card';
+        if (selectedListedRoom === rm.code) card.classList.add('selected');
+        var status = rm.playing ? '● في اللعب' : '○ في اللوبي';
+        card.innerHTML = '<div class="rc-code">' + rm.code + '</div>' +
+          '<div class="rc-meta">' + (rm.host ? ('القائد: ' + rm.host + ' · ') : '') +
+          'لاعبين: ' + (rm.players || '?') + ' · ' + status + '</div>';
+        card.onclick = function () {
+          selectedListedRoom = rm.code;
+          var inp = document.getElementById('join-code-input');
+          if (inp) inp.value = rm.code;
+          list.querySelectorAll('.room-card').forEach(function (c) { c.classList.remove('selected'); });
+          card.classList.add('selected');
+          toast('تم اختيار الروم: ' + rm.code, 'info');
+        };
+        list.appendChild(card);
+      });
+    }).catch(function () {
+      if (empty) empty.textContent = 'فشل جلب الرومات — تأكد من عنوان السيرفر';
+    });
+  }
+  var btnJoinTabCode = document.getElementById('btn-join-tab-code');
+  if (btnJoinTabCode) btnJoinTabCode.onclick = function () { setJoinTab('code'); };
+  var btnJoinTabList = document.getElementById('btn-join-tab-list');
+  if (btnJoinTabList) btnJoinTabList.onclick = function () { setJoinTab('list'); };
+  var btnRefreshRooms = document.getElementById('btn-refresh-rooms');
+  if (btnRefreshRooms) btnRefreshRooms.onclick = function () { refreshRoomsList(); };
 
   var btnDoJoin = document.getElementById('btn-do-join');
   if (btnDoJoin) btnDoJoin.onclick = function () {
     var code = (document.getElementById('join-code-input').value || '').trim().toLowerCase().replace(/\s+/g, '');
-    var ip = (document.getElementById('join-ip-input') && document.getElementById('join-ip-input').value || '127.0.0.1').trim();
-    if (!code || code.length < 2) { toast('اكتب رمز الروم', 'error'); return; }
-    if (!ip) { toast('اكتب IP السيرفر', 'error'); return; }
+    var mode = state._joinNetMode;
+    if (!mode) { toast('اختر LAN أو كلاودفير أولاً', 'error'); return; }
+    var ip = getJoinServerAddress();
+    if (!code || code.length < 2) { toast('اكتب رمز الروم أو اختر من القائمة', 'error'); return; }
+    if (!ip) { toast(mode === 'lan' ? 'اكتب IP جهاز القائد على الشبكة' : 'الصق رابط الكلاودفير', 'error'); return; }
     if (!joinZipReady) {
       toast('ارفع الملف الشامل أولاً', 'error');
       if (joinUploadInput) joinUploadInput.click();
       return;
     }
-    toast('جاري التحقق من السيرفر...', 'info');
+    toast(mode === 'lan' ? 'جاري الاتصال بـ LAN...' : 'جاري الاتصال بالكلاودفير...', 'info');
     checkLanServer(ip, function (ok) {
       if (!ok) {
-        toast('مش واصل للسيرفر — تأكد إن القائد فاتح Python + الرابط العام', 'error');
+        if (mode === 'lan') {
+          toast('مش واصل على LAN — تأكد إن القائد فاتح python lan_host.py وإنكم على نفس الشبكة', 'error');
+        } else {
+          toast('مش واصل — تأكد من رابط الكلاودفير وإن القائد فاتح Python + tunnel', 'error');
+        }
         return;
       }
       setupLanLobby(false, code, ip);
@@ -4723,6 +5476,7 @@
     var cd = document.getElementById('set-cam-dist');
     var ch = document.getElementById('set-cam-h');
     var cs = document.getElementById('set-cam-side');
+    var gfx = document.getElementById('set-graphics');
 
     function targetPlayer() {
       return players[state.pauseOwner != null ? state.pauseOwner : 0];
@@ -4740,6 +5494,10 @@
     if (cd) cd.oninput = function () { targetPlayer().settings.camDist = parseFloat(cd.value); };
     if (ch) ch.oninput = function () { targetPlayer().settings.camHeight = parseFloat(ch.value); };
     if (cs) cs.oninput = function () { targetPlayer().settings.camSide = parseFloat(cs.value); };
+    if (gfx) gfx.onchange = function () {
+      applyGraphicsQuality(parseInt(gfx.value, 10) || 3);
+      toast('تم تطبيق مستوى الجرافيكس ' + gfx.value, 'success');
+    };
 
     var kb = document.getElementById('kb-controls');
     if (kb) kb.innerHTML = 'W/A/S/D حركة<br>Space قفز<br>F جري<br>Ctrl إخفاء الماوس<br>Esc قائمة';
@@ -4848,6 +5606,11 @@
 
     // Update hideAllScreens list if needed - name entry is separate
     showNameEntry(false);
+    // restore graphics preference
+    try {
+      var g = parseInt(localStorage.getItem('sm_graphics') || '3', 10);
+      applyGraphicsQuality(g);
+    } catch (e) { applyGraphicsQuality(3); }
     animate();
   }
   function init() { loadingText.textContent = 'جاهز'; setTimeout(finishLoading, 100); }

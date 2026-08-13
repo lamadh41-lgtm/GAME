@@ -61,6 +61,9 @@ body {
   position: fixed; inset: 0;
   display: flex; align-items: center; justify-content: center;
   z-index: 100;
+  padding: max(16px, env(safe-area-inset-top, 0px)) max(16px, env(safe-area-inset-right, 0px)) max(16px, env(safe-area-inset-bottom, 0px)) max(16px, env(safe-area-inset-left, 0px));
+  box-sizing: border-box;
+  overflow: auto;
   background:
     radial-gradient(ellipse at 20% 50%, rgba(0,212,255,0.08) 0%, transparent 50%),
     radial-gradient(ellipse at 80% 20%, rgba(255,45,85,0.06) 0%, transparent 40%),
@@ -73,14 +76,18 @@ body {
   background: linear-gradient(145deg, rgba(18,24,38,0.95), rgba(12,16,28,0.98));
   border: 1px solid rgba(0,212,255,0.2);
   border-radius: 24px;
-  padding: 48px 52px;
+  padding: 28px 28px 32px;
   text-align: center;
   box-shadow: 0 25px 80px rgba(0,0,0,0.6), var(--glow);
   max-width: 520px;
-  width: 92%;
+  width: min(92%, 520px);
+  max-height: min(90vh, 900px);
+  overflow-x: hidden;
+  overflow-y: auto;
   backdrop-filter: blur(20px);
   position: relative;
-  overflow: hidden;
+  margin: 24px;
+  box-sizing: border-box;
 }
 .menu-container::before, .lobby-container::before {
   content: '';
@@ -243,7 +250,22 @@ body {
 }
 .level-select-box select:focus { outline: none; border-color: var(--accent); }
 
-.lobby-actions { display: flex; flex-direction: column; gap: 12px; }
+.lobby-actions {
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+  position: sticky;
+  top: 0;
+  z-index: 20;
+  background: linear-gradient(180deg, rgba(12,16,28,0.98) 60%, rgba(12,16,28,0.85));
+  padding: 8px 0 12px;
+  margin-bottom: 8px !important;
+}
+.lobby-actions .btn-primary {
+  font-size: 1.1rem;
+  padding: 14px 18px;
+  box-shadow: 0 8px 24px rgba(0, 180, 216, 0.35);
+}
 
 /* ===== BUILD UI ===== */
 #build-ui { position: fixed; inset: 0; pointer-events: none; z-index: 50; }
@@ -824,14 +846,127 @@ body {
 }
 #lobby-screen.online-lobby .lobby-container {
   pointer-events: auto;
-  margin-right: auto;
-  margin-left: 24px;
-  max-width: 420px;
-  max-height: 92vh;
+  margin: 20px auto;
+  max-width: 440px;
+  width: min(92vw, 440px);
+  max-height: min(88vh, 820px);
   overflow-y: auto;
   background: linear-gradient(145deg, rgba(10,14,24,0.88), rgba(8,12,22,0.92));
-  padding: 28px 24px;
+  padding: 20px 18px 24px;
 }
 #lobby-screen.online-lobby .custom-panel {
   text-align: right;
 }
+
+/* ===== Net ping / WiFi HUD ===== */
+.net-ping-hud {
+  position: fixed;
+  top: max(56px, calc(env(safe-area-inset-top, 0px) + 56px));
+  left: 50%;
+  right: auto;
+  transform: translateX(-50%);
+  z-index: 9000;
+  background: rgba(8, 12, 22, 0.9);
+  border: 1px solid rgba(0, 212, 255, 0.35);
+  border-radius: 14px;
+  padding: 10px 16px 8px;
+  display: flex;
+  flex-direction: row;
+  align-items: center;
+  gap: 12px;
+  pointer-events: none;
+  min-width: 140px;
+  box-shadow: 0 8px 28px rgba(0,0,0,0.45);
+}
+.net-ping-hud.hidden { display: none !important; }
+.wifi-bars {
+  display: flex;
+  align-items: flex-end;
+  gap: 3px;
+  height: 22px;
+  direction: ltr;
+}
+.wifi-bars .wb {
+  width: 6px;
+  border-radius: 2px 2px 0 0;
+  background: #334155;
+  transition: background .2s, box-shadow .2s;
+}
+.wifi-bars .wb[data-n="1"] { height: 6px; }
+.wifi-bars .wb[data-n="2"] { height: 10px; }
+.wifi-bars .wb[data-n="3"] { height: 14px; }
+.wifi-bars .wb[data-n="4"] { height: 18px; }
+.wifi-bars .wb[data-n="5"] { height: 22px; }
+.wifi-bars.level-1 .wb[data-n="1"],
+.wifi-bars.level-2 .wb[data-n="1"],
+.wifi-bars.level-2 .wb[data-n="2"],
+.wifi-bars.level-3 .wb[data-n="1"],
+.wifi-bars.level-3 .wb[data-n="2"],
+.wifi-bars.level-3 .wb[data-n="3"],
+.wifi-bars.level-4 .wb[data-n="1"],
+.wifi-bars.level-4 .wb[data-n="2"],
+.wifi-bars.level-4 .wb[data-n="3"],
+.wifi-bars.level-4 .wb[data-n="4"],
+.wifi-bars.level-5 .wb {
+  background: currentColor;
+  box-shadow: 0 0 6px currentColor;
+}
+.wifi-bars.color-green { color: #30d158; }
+.wifi-bars.color-orange { color: #f59e0b; }
+.wifi-bars.color-red { color: #ff2d55; }
+.ping-ms {
+  font-size: 0.72rem;
+  font-weight: 700;
+  color: #94a3b8;
+  font-family: Consolas, monospace;
+  direction: ltr;
+}
+
+/* Room list cards */
+.room-card {
+  background: rgba(15, 23, 42, 0.9);
+  border: 1px solid rgba(0, 212, 255, 0.22);
+  border-radius: 10px;
+  padding: 10px 12px;
+  cursor: pointer;
+  text-align: right;
+  transition: border-color .15s, background .15s;
+}
+.room-card:hover, .room-card.selected {
+  border-color: #00d4ff;
+  background: rgba(0, 212, 255, 0.08);
+}
+.room-card .rc-code { color: #00d4ff; font-weight: 800; font-size: 1rem; }
+.room-card .rc-meta { color: #94a3b8; font-size: 0.78rem; margin-top: 4px; }
+
+/* Scale mode buttons in toolbar */
+.obj-toolbar button.scale-mode-btn {
+  font-size: 0.65rem;
+  min-width: 36px;
+  padding: 4px 6px;
+}
+.obj-toolbar button.scale-mode-btn.hidden { display: none !important; }
+
+.fps-ms, .fps-hud {
+  font-size: 0.72rem;
+  font-weight: 700;
+  color: #67e8f9;
+  font-family: Consolas, monospace;
+  direction: ltr;
+}
+.fps-hud {
+  position: fixed;
+  top: max(56px, calc(env(safe-area-inset-top, 0px) + 56px));
+  left: 50%;
+  right: auto;
+  transform: translateX(-50%);
+  z-index: 8999;
+  background: rgba(8, 12, 22, 0.9);
+  border: 1px solid rgba(0, 212, 255, 0.35);
+  border-radius: 12px;
+  padding: 8px 14px;
+  pointer-events: none;
+  box-shadow: 0 8px 28px rgba(0,0,0,0.4);
+}
+.fps-hud.hidden { display: none !important; }
+.net-ping-hud .fps-ms { margin-top: 2px; }
