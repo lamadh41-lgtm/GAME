@@ -172,26 +172,25 @@
       cursor: pointer;
     }
     .ip-chip:hover { background: rgba(0,212,255,0.22); }
-    code { color: #67e8f9; }
   </style>
 </head>
 <body>
   <div class="wrap">
     <h1>لوحة سيرفر STORY MODE</h1>
     <p class="sub">
-      أنت السيرفر الوحيد — أي حد من أي مكان يدخل أونلاين يتصل بيك.<br>
-      لازم تفضل الصفحة مفتوحة أثناء اللعب (للمراقبة).
+      الصفحة دي للمراقبة والتأكيد إن السيرفر شغال.<br>
+      لازم تفضل الصفحة مفتوحة أثناء اللعب.
     </p>
 
     <div class="card">
-      <h2>① تشغيل السيرفر (Python)</h2>
+      <h2>① تشغيل سيرفر LAN المحلي</h2>
       <div id="status-pill" class="status-pill status-off">
         <span class="dot"></span>
         <span id="status-text">السيرفر متوقف</span>
       </div>
 
       <div class="row">
-        <input id="lan-ip" type="text" placeholder="IP أو رابط cloudflared" value="127.0.0.1" />
+        <input id="lan-ip" type="text" placeholder="IP الجهاز (مثال: 192.168.1.10)" value="127.0.0.1" />
         <input id="lan-port" type="text" placeholder="المنفذ" value="27100" style="max-width:110px" />
       </div>
 
@@ -199,14 +198,14 @@
       <button class="btn btn-stop" id="btn-stop" type="button" style="display:none">■ إيقاف المراقبة</button>
 
       <p class="hint">
-        1) شغّل على جهازك: <code>python lan_host.py</code><br>
-        2) للأونلاين العام (من غير VPN) في تيرمينال تاني:<br>
-        <code>cloudflared tunnel --url http://localhost:27100</code><br>
-        3) الصق رابط <code>https://xxxx.trycloudflare.com</code> في خانة العنوان فوق، أو استخدمه في اللعبة.
+        المتصفح <strong>مش يقدر</strong> يفتح منفذ شبكة لوحده. لازم تشغّل مرة واحدة على جهازك:
+        <br><code style="color:#67e8f9">python lan_host.py</code>
+        <br>
+        بعد ما يشتغل، اضغط الزر فوق — الصفحة هتقرأ النتائج وتعرضها زي التيرمنال.
       </p>
 
       <div id="ips-box" style="display:none;margin-top:14px">
-        <div style="color:#94a3b8;font-size:0.85rem;margin-bottom:6px">عناوين IP محلية (اضغط للنسخ — LAN / Radmin فقط):</div>
+        <div style="color:#94a3b8;font-size:0.85rem;margin-bottom:6px">عناوين IP (اضغط للنسخ — ابعتها لصحابك على نفس الشبكة / VPN):</div>
         <div class="ip-list" id="ip-list"></div>
       </div>
     </div>
@@ -226,21 +225,18 @@
     </div>
 
     <div class="card">
-      <h2>④ صاحبك يدخل إزاي؟ (من أي مكان — من غير VPN)</h2>
+      <h2>④ صاحبك يدخل إزاي؟</h2>
       <ol class="steps">
-        <li>أنت تشغّل <code>python lan_host.py</code> وتسيب النافذة مفتوحة.</li>
-        <li>تشغّل نفق عام: <code>cloudflared tunnel --url http://localhost:27100</code></li>
-        <li>تنسخ الرابط <code>https://....trycloudflare.com</code> وتبعته لصحابك.</li>
-        <li>تفتح اللعبة → أونلاين → إنشاء لوبي → الرمز + <strong>نفس الرابط</strong>.</li>
-        <li>صاحبك: أونلاين → انضمام → <strong>نفس الرمز + نفس الرابط</strong> + يرفع نفس ملف البيانات.</li>
+        <li>ابعتله <strong>ملفات اللعبة</strong> (الـ ZIP) + <strong>ملف البيانات</strong> (نفس نسختك).</li>
+        <li>لو هو في <strong>بيت تاني</strong>: الاتنين تدخلوا نفس شبكة VPN (Radmin أو Hamachi).</li>
+        <li>أنت تشغّل <code>python lan_host.py</code> وتسيب <strong>الصفحة دي</strong> مفتوحة للمراقبة.</li>
+        <li>تفتح اللعبة (<code>index.html</code>) → أونلاين → إنشاء لوبي → تكتب الرمز + IP الظاهر فوق.</li>
+        <li>صاحبك يفتح اللعبة → أونلاين → انضمام → <strong>نفس الرمز + نفس الـ IP</strong> ويرفع نفس ملف البيانات.</li>
       </ol>
-      <p class="hint" style="margin-top:12px">
-        لو الاتنين على نفس الشبكة (أو Radmin): ممكن تستخدم IP المحلي بدل الرابط العام.
-      </p>
       <a class="btn btn-link" href="index.html">فتح اللعبة (index.html)</a>
       <p class="hint">
-        ملاحظة: زر الأونلاين مربوط فقط بالشخص اللي شغّال عنده <code>lan_host.py</code>.
-        صفحة السيرفر دي للمراقبة — اللعب من <strong>index.html</strong>.
+        ملاحظة: صفحة السيرفر دي للمراقبة. اللعب نفسه من <strong>index.html</strong>.
+        لو مش عايز Python خالص، استخدم من اللعبة وضع الأونلاين العادي (PeerJS) من غير lan_host.
       </p>
     </div>
   </div>
@@ -273,21 +269,10 @@
         statusText.textContent = text;
       }
 
-      function normalizeHost(raw, port) {
-        var s = (raw || '').trim();
-        if (!s) return 'http://127.0.0.1:' + (port || '27100');
-        if (/^https?:\/\//i.test(s)) return s.replace(/\/$/, '');
-        if (s.indexOf(':') !== -1 && s.indexOf('/') === -1) return 'http://' + s;
-        if (/^[a-z0-9.-]+\.[a-z]{2,}$/i.test(s) && !/^\d+\.\d+\.\d+\.\d+$/.test(s)) {
-          return 'https://' + s.replace(/\/$/, '');
-        }
-        return 'http://' + s + ':' + (port || '27100');
-      }
-
       function baseUrl() {
-        var ip = document.getElementById('lan-ip').value;
+        var ip = (document.getElementById('lan-ip').value || '127.0.0.1').trim();
         var port = (document.getElementById('lan-port').value || '27100').trim();
-        return normalizeHost(ip, port);
+        return 'http://' + ip + ':' + port;
       }
 
       function copyText(t) {
@@ -329,8 +314,10 @@
           var rooms = (j.rooms || []).join(', ') || '(لا يوجد لوبيات بعد)';
           log('OK | port=' + (j.port || '?') + ' | rooms: ' + rooms, 'ok');
           if (j.ips) renderIps(j.ips);
+          // لو السيرفر على جهاز تاني، حدّث IP الظاهر من الرد إن أمكن
           if (j.ips && j.ips.length && document.getElementById('lan-ip').value === '127.0.0.1') {
-            log('للأونلاين العام استخدم رابط cloudflared — للـ LAN استخدم IP من القائمة', 'warn');
+            // Prefer non-localhost suggestion in log only
+            log('جرّب IP من القائمة فوق لو صاحبك على جهاز تاني', 'warn');
           }
         }).catch(function () {
           failCount++;
@@ -345,7 +332,7 @@
       function startWatch() {
         stopWatch();
         log('بدء مراقبة السيرفر على ' + baseUrl(), 'info');
-        log('تأكد إن lan_host.py شغال. للأونلاين العام: cloudflared tunnel --url http://localhost:27100', 'warn');
+        log('تأكد إن lan_host.py شغال على جهاز القائد', 'warn');
         setStatus('off', 'جاري الفحص...');
         document.getElementById('btn-start').style.display = 'none';
         document.getElementById('btn-stop').style.display = 'block';
@@ -372,9 +359,9 @@
       });
 
       log('لوحة السيرفر جاهزة.', 'info');
-      log('1) شغّل python lan_host.py', 'info');
-      log('2) للأونلاين العام: cloudflared tunnel --url http://localhost:27100', 'info');
-      log('3) اضغط «ابدأ المراقبة» ثم افتح index.html', 'info');
+      log('1) شغّل python lan_host.py في التيرمنال', 'info');
+      log('2) اضغط «ابدأ المراقبة»', 'info');
+      log('3) افتح اللعبة من index.html وأنشئ اللوبي', 'info');
     })();
   </script>
 </body>

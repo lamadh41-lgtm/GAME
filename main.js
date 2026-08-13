@@ -26,10 +26,6 @@
     lanSince: 0,
     lanPollTimer: null,
     useLan: false,
-    graphicsLevel: 3,
-    scaleMode: 'uniform', // uniform | axis
-    netPing: 0,
-    netPingBars: 3,
     paused: false,
     pauseSide: 'full', // full | left | right
     volume: 0.8,
@@ -133,64 +129,12 @@
   const scene = new THREE.Scene();
   scene.background = new THREE.Color(0x87ceeb);
   scene.fog = new THREE.Fog(0x87ceeb, 70, 180);
-  const renderer = new THREE.WebGLRenderer({ canvas: canvas, antialias: true, powerPreference: 'high-performance' });
+  const renderer = new THREE.WebGLRenderer({ canvas: canvas, antialias: true });
   renderer.setSize(window.innerWidth, window.innerHeight);
   renderer.setPixelRatio(Math.min(window.devicePixelRatio, 2));
   renderer.shadowMap.enabled = true;
   renderer.shadowMap.type = THREE.PCFSoftShadowMap;
   renderer.setScissorTest(false);
-
-  // ===== Graphics quality (1=حقير .. 5=أسطوري) =====
-  var _sunLightRef = null;
-  function applyGraphicsQuality(level) {
-    level = Math.max(1, Math.min(5, parseInt(level, 10) || 3));
-    state.graphicsLevel = level;
-    try { localStorage.setItem('sm_graphics', String(level)); } catch (e) {}
-    var dpr = window.devicePixelRatio || 1;
-    // 1 حقير: lowest res, no shadows, no AA — max FPS
-    // 2 منخفض: low res, basic shadows
-    // 3 متوسط: balanced
-    // 4 عالي: high
-    // 5 أسطوري: max quality
-    var cfg = {
-      1: { pr: 0.6, shadows: false, map: 512, soft: 0.55, softCast: false, type: THREE.BasicShadowMap },
-      2: { pr: 0.85, shadows: true, map: 512, soft: 0.75, softCast: true, type: THREE.BasicShadowMap },
-      3: { pr: Math.min(dpr, 1.25), shadows: true, map: 1024, soft: 1.0, sunCast: true, type: THREE.PCFShadowMap },
-      4: { pr: Math.min(dpr, 1.75), shadows: true, map: 2048, soft: 1.15, sunCast: true, type: THREE.PCFSoftShadowMap },
-      5: { pr: Math.min(dpr, 2), shadows: true, map: 4096, soft: 1.35, sunCast: true, type: THREE.PCFSoftShadowMap }
-    }[level];
-    renderer.setPixelRatio(cfg.pr);
-    renderer.shadowMap.enabled = cfg.shadows;
-    renderer.shadowMap.type = cfg.type;
-    if (_sunLightRef) {
-      _sunLightRef.castShadow = cfg.sunCast && cfg.shadows;
-      if (cfg.shadows) {
-        _sunLightRef.shadow.mapSize.set(cfg.map, cfg.map);
-        if (_sunLightRef.shadow.map) {
-          try { _sunLightRef.shadow.map.dispose(); } catch (e) {}
-          _sunLightRef.shadow.map = null;
-        }
-      }
-      _sunLightRef.intensity = 1.2 * (cfg.fog || 1); // keep readable
-    }
-    // slightly reduce ground/scene load on low
-    try {
-      if (typeof ground !== 'undefined' && ground && ground.material) {
-        ground.receiveShadow = cfg.shadows;
-      }
-    } catch (e) {}
-    var hints = {
-      1: 'الجرافيكس الحقير — أعلى فريمات لأضعف الأجهزة',
-      2: 'جرافيكس منخفض — أجهزة ضعيفة',
-      3: 'جرافيكس متوسط — توازن الشكل والأداء',
-      4: 'جرافيكس عالي — أجهزة قوية',
-      5: 'الجرافيكس الأسطوري — أقصى جودة'
-    };
-    var el = document.getElementById('graphics-hint');
-    if (el) el.textContent = hints[level] || '';
-    var sel = document.getElementById('set-graphics');
-    if (sel) sel.value = String(level);
-  }
 
   let buildCamera = new THREE.PerspectiveCamera(70, window.innerWidth / window.innerHeight, 0.1, 500);
   buildCamera.position.copy(state.flyPos);
@@ -198,7 +142,6 @@
   scene.add(new THREE.AmbientLight(0xffffff, 0.5));
   const sun = new THREE.DirectionalLight(0xfff5e0, 1.2);
   sun.position.set(40, 60, 30); sun.castShadow = true;
-  _sunLightRef = sun;
   sun.shadow.mapSize.set(2048, 2048);
   sun.shadow.camera.near = 1; sun.shadow.camera.far = 200;
   sun.shadow.camera.left = -60; sun.shadow.camera.right = 60;
@@ -2022,7 +1965,12 @@
       }
     }
 
-    // Gizmo handled on mousedown
+    // If already dragging selected object - click to place/fix
+    if (selectedBuildObj && isDraggingObj && objToolMode === 'move') {
+      isDraggingObj = false;
+      toast('تم التثبيت', 'success');
+      return;
+    }
 
     // Click on existing object to select
     var hitsObj = raycaster.intersectObjects(state.buildObjects, true);
@@ -2031,8 +1979,8 @@
       while (obj.parent && state.buildObjects.indexOf(obj) === -1) obj = obj.parent;
       if (state.buildObjects.indexOf(obj) !== -1) {
         selectBuildObject(obj);
+        isDraggingObj = true;
         objToolMode = 'move';
-        rebuildGizmo();
         return;
       }
     }
@@ -2075,73 +2023,25 @@
     mouse.y = -(e.clientY / window.innerHeight) * 2 + 1;
     raycaster.setFromCamera(mouse, buildCamera);
 
-    // Hover highlight on axes when not dragging
-    if (!gizmoDrag && selectedBuildObj && transformGizmo && (objToolMode === 'move' || objToolMode === 'scale')) {
-      var hAxis = pickGizmo(raycaster);
-      setGizmoHover(hAxis);
-    } else if (!gizmoDrag) {
-      setGizmoHover(null);
-    }
-
-    // Axis gizmo drag — click axis + drag along it (also accept buttons===0 with pointer capture fallback via grabbed flag)
-    if (gizmoDrag && gizmoDrag.grabbed && selectedBuildObj) {
-      var axis = gizmoDrag.axis;
-      // Mouse delta in NDC-ish pixels projected onto screen axis direction
-      var mx = (e.clientX - gizmoDrag.startX);
-      var my = -(e.clientY - gizmoDrag.startY); // screen y up
-      var sa = gizmoDrag.screenAxis || { x: 1, y: 0 };
-      var along = mx * sa.x + my * sa.y;
-      // Scale sensitivity by distance to object
-      var dist = buildCamera.position.distanceTo(gizmoDrag.startPos);
-      var sens = dist * 0.0025;
-      var moveAmt = along * sens;
-
-      if (gizmoDrag.mode === 'move') {
-        var pos = gizmoDrag.startPos.clone();
-        if (axis === 'x') pos.x += moveAmt;
-        else if (axis === 'y') pos.y += moveAmt;
-        else if (axis === 'z') pos.z += moveAmt;
-        selectedBuildObj.position.copy(pos);
-      } else if (gizmoDrag.mode === 'scale') {
-        var sc = gizmoDrag.startScale.clone();
-        var factor = 1 + along * 0.008;
-        factor = Math.max(0.05, Math.min(6, factor));
-        if (state.scaleMode === 'uniform') {
-          var nx = Math.max(0.15, Math.min(8, sc.x * factor));
-          selectedBuildObj.scale.set(nx, nx, nx);
-        } else {
-          if (axis === 'x') sc.x = Math.max(0.15, Math.min(8, sc.x * factor));
-          if (axis === 'y') sc.y = Math.max(0.15, Math.min(8, sc.y * factor));
-          if (axis === 'z') sc.z = Math.max(0.15, Math.min(8, sc.z * factor));
-          selectedBuildObj.scale.copy(sc);
-        }
-      }
-      syncGizmoTransform();
-      updateObjToolbarPos();
-      return;
-    }
-
-    // Legacy free drag on ground (optional when isDraggingObj)
+    // Drag selected object
     if (selectedBuildObj && isDraggingObj && objToolMode === 'move') {
       var hits = raycaster.intersectObject(ground);
       if (hits.length) {
-        selectedBuildObj.position.set(hits[0].point.x, selectedBuildObj.position.y, hits[0].point.z);
-        syncGizmoTransform();
+        selectedBuildObj.position.set(hits[0].point.x, 0, hits[0].point.z);
         updateObjToolbarPos();
       }
       return;
     }
-    if (selectedBuildObj && objToolMode === 'rotate' && (e.buttons === 1) && !gizmoDrag) {
+    // Rotate with mouse drag when in rotate mode - handled in mousemove with buttons
+    if (selectedBuildObj && objToolMode === 'rotate' && (e.buttons === 1)) {
       selectedBuildObj.rotation.y += e.movementX * 0.01;
       updateObjToolbarPos();
       return;
     }
-    // Fallback scale drag without axis (uniform) if no gizmo handle grabbed
-    if (selectedBuildObj && objToolMode === 'scale' && (e.buttons === 1) && !gizmoDrag && state.scaleMode === 'uniform') {
+    if (selectedBuildObj && objToolMode === 'scale' && (e.buttons === 1)) {
       var s = selectedBuildObj.scale.x + e.movementY * -0.01;
-      s = Math.max(0.15, Math.min(8, s));
+      s = Math.max(0.3, Math.min(5, s));
       selectedBuildObj.scale.set(s, s, s);
-      syncGizmoTransform();
       updateObjToolbarPos();
       return;
     }
@@ -2585,7 +2485,6 @@
     } else if (name === 'lobby') {
       // Do NOT reset player2Joined here — callers set it intentionally
       lobbyScreen.classList.remove('hidden');
-      if (lobbyScreen) lobbyScreen.classList.remove('online-lobby');
       updateLobbyLevelSelect();
     } else if (name === 'build') {
       if (typeof stopAllScripts === 'function') stopAllScripts();
@@ -2664,8 +2563,6 @@
     // Hide respawn markers during play (build-only visuals)
     clearRespawnMarkers();
 
-    if (lobbyScreen) lobbyScreen.classList.remove('online-lobby');
-
     if (state.playType === 'online') {
       setupPlayersForNet();
       // force next pose to include clothes so remotes get appearance
@@ -2678,16 +2575,7 @@
     if (state.playType === 'online' && state.isHost) {
       var levelName = (levelId && state.levels[levelId]) ? state.levels[levelId].name : '';
       var startMsg = { type: 'start', levelId: levelId, levelName: levelName, roster: state.netRoster };
-      if (state.useLan) {
-        lanSend(startMsg);
-        try {
-          fetch(lanBaseUrl() + '/roommeta', {
-            method: 'POST',
-            headers: { 'Content-Type': 'application/json' },
-            body: JSON.stringify({ room: state.roomCode, host: state.playerName || 'القائد', players: (state.netRoster || []).length, playing: true })
-          });
-        } catch (e) {}
-      }
+      if (state.useLan) lanSend(startMsg);
       else broadcastToAll(startMsg);
     }
     // send first poses quickly after start
@@ -2751,75 +2639,7 @@
       players[0].yaw -= e.movementX * sens0;
     }
   });
-  window.addEventListener('mousedown', function (e) {
-    if (state.mode !== 'build' || state.flyMode) return;
-    if (e.button !== 0) return;
-    if (e.target.closest && (e.target.closest('#obj-toolbar') || e.target.closest('.hierarchy-panel') || e.target.closest('.build-toolbar') || e.target.closest('.build-sidebar-wrap') || e.target.closest('.level-panel') || e.target.closest('#respawn-choice-panel'))) return;
-    mouse.x = (e.clientX / window.innerWidth) * 2 - 1;
-    mouse.y = -(e.clientY / window.innerHeight) * 2 + 1;
-    raycaster.setFromCamera(mouse, buildCamera);
-    if (selectedBuildObj && transformGizmo && (objToolMode === 'move' || objToolMode === 'scale')) {
-      var axisHit = pickGizmo(raycaster);
-      if (axisHit) {
-        e.preventDefault();
-        e.stopPropagation();
-        try { if (e.target && e.target.setPointerCapture) e.target.setPointerCapture(e.pointerId); } catch (err) {}
-        var origin = selectedBuildObj.position.clone();
-        var axisDir = new THREE.Vector3(
-          axisHit === 'x' ? 1 : 0,
-          axisHit === 'y' ? 1 : 0,
-          axisHit === 'z' ? 1 : 0
-        );
-        var hitPoint = null;
-        var hitsG = raycaster.intersectObject(transformGizmo, true);
-        if (hitsG.length) hitPoint = hitsG[0].point.clone();
-        gizmoDrag = {
-          axis: axisHit,
-          mode: objToolMode,
-          startX: e.clientX,
-          startY: e.clientY,
-          startPos: selectedBuildObj.position.clone(),
-          startScale: selectedBuildObj.scale.clone(),
-          origin: origin,
-          axisDir: axisDir,
-          startPointerDist: 0,
-          grabbed: true
-        };
-        if (hitPoint) {
-          var toHit = hitPoint.clone().sub(origin);
-          gizmoDrag.startPointerDist = toHit.dot(axisDir);
-        }
-        var cam = buildCamera;
-        var axisEnd = origin.clone().add(axisDir);
-        var a0 = origin.clone().project(cam);
-        var a1 = axisEnd.clone().project(cam);
-        gizmoDrag.screenAxis = new THREE.Vector2(a1.x - a0.x, a1.y - a0.y);
-        if (gizmoDrag.screenAxis.length() > 1e-6) gizmoDrag.screenAxis.normalize();
-        else gizmoDrag.screenAxis.set(1, 0);
-        setGizmoHover(axisHit);
-        document.body.style.cursor = 'grabbing';
-        return;
-      }
-    }
-  }, true);
-  window.addEventListener('click', function (e) {
-    if (state.mode === 'build' && !state.flyMode) {
-      // If we just finished a gizmo drag, ignore the click selection
-      if (state._gizmoJustDragged) {
-        state._gizmoJustDragged = false;
-        return;
-      }
-      onBuildClick(e);
-    }
-  });
-  window.addEventListener('mouseup', function () {
-    if (gizmoDrag && gizmoDrag.grabbed) {
-      state._gizmoJustDragged = true;
-      document.body.style.cursor = '';
-    }
-    gizmoDrag = null;
-    if (typeof setGizmoHover === 'function') setGizmoHover(null);
-  });
+  window.addEventListener('click', function (e) { if (state.mode === 'build' && !state.flyMode) onBuildClick(e); });
   window.addEventListener('gamepadconnected', function (e) {
     document.getElementById('gamepad-hint').textContent = 'دراعة: ' + e.gamepad.id + ' — اضغط ✕';
   });
@@ -2876,193 +2696,21 @@
     obj.userData._hlMats = saved;
   }
 
-
-  // ===== Transform Gizmo (move / scale axes) =====
-  var transformGizmo = null;
-  var gizmoDrag = null; // { axis, mode, startMouse, startPos, startScale }
-  var gizmoHoverAxis = null;
-
-  function makeAxisArrow(color, axis) {
-    var g = new THREE.Group();
-    g.userData.gizmoAxis = axis;
-    g.userData.isGizmo = true;
-    var mat = new THREE.MeshBasicMaterial({ color: color, depthTest: false, depthWrite: false, transparent: true, opacity: 0.98 });
-    mat.toneMapped = false;
-    var shaft = new THREE.Mesh(new THREE.CylinderGeometry(0.055, 0.055, 1.35, 10), mat);
-    var head = new THREE.Mesh(new THREE.ConeGeometry(0.16, 0.35, 12), mat.clone());
-    shaft.renderOrder = 1000;
-    head.renderOrder = 1000;
-    if (axis === 'x') {
-      shaft.rotation.z = -Math.PI / 2;
-      shaft.position.x = 0.7;
-      head.rotation.z = -Math.PI / 2;
-      head.position.x = 1.45;
-    } else if (axis === 'y') {
-      shaft.position.y = 0.7;
-      head.position.y = 1.45;
-    } else {
-      shaft.rotation.x = Math.PI / 2;
-      shaft.position.z = 0.7;
-      head.rotation.x = Math.PI / 2;
-      head.position.z = 1.45;
-    }
-    shaft.userData.gizmoAxis = axis;
-    shaft.userData.isGizmo = true;
-    head.userData.gizmoAxis = axis;
-    head.userData.isGizmo = true;
-    g.add(shaft);
-    g.add(head);
-    // fat invisible collider so mouse easy to grab
-    var pickMat = new THREE.MeshBasicMaterial({ visible: false });
-    var pick = new THREE.Mesh(new THREE.CylinderGeometry(0.45, 0.45, 2.2, 8), pickMat);
-    pick.rotation.copy(shaft.rotation);
-    pick.position.copy(shaft.position);
-    pick.userData.gizmoAxis = axis;
-    pick.userData.isGizmo = true;
-    g.add(pick);
-    return g;
-  }
-
-  function makeScaleHandle(color, axis) {
-    var g = new THREE.Group();
-    g.userData.gizmoAxis = axis;
-    g.userData.isGizmo = true;
-    var mat = new THREE.MeshBasicMaterial({ color: color, depthTest: false, depthWrite: false, transparent: true, opacity: 0.98 });
-    mat.toneMapped = false;
-    var box = new THREE.Mesh(new THREE.BoxGeometry(0.28, 0.28, 0.28), mat);
-    box.renderOrder = 1000;
-    if (axis === 'x') box.position.x = 1.25;
-    else if (axis === 'y') box.position.y = 1.25;
-    else box.position.z = 1.25;
-    box.userData.gizmoAxis = axis;
-    box.userData.isGizmo = true;
-    g.add(box);
-    var line = new THREE.Mesh(new THREE.CylinderGeometry(0.045, 0.045, 1.1, 8), mat.clone());
-    line.renderOrder = 1000;
-    if (axis === 'x') { line.rotation.z = -Math.PI / 2; line.position.x = 0.55; }
-    else if (axis === 'y') { line.position.y = 0.55; }
-    else { line.rotation.x = Math.PI / 2; line.position.z = 0.55; }
-    line.userData.gizmoAxis = axis;
-    line.userData.isGizmo = true;
-    g.add(line);
-    var pickMat = new THREE.MeshBasicMaterial({ visible: false });
-    var pick = new THREE.Mesh(new THREE.BoxGeometry(0.5, 0.5, 0.5), pickMat);
-    pick.position.copy(box.position);
-    pick.userData.gizmoAxis = axis;
-    pick.userData.isGizmo = true;
-    g.add(pick);
-    return g;
-  }
-
-  function disposeGizmo() {
-    if (!transformGizmo) return;
-    scene.remove(transformGizmo);
-    transformGizmo.traverse(function (c) {
-      if (c.geometry) c.geometry.dispose();
-      if (c.material) c.material.dispose();
-    });
-    transformGizmo = null;
-    gizmoDrag = null;
-    gizmoHoverAxis = null;
-    try { document.body.style.cursor = ''; } catch (e) {}
-  }
-
-  function rebuildGizmo() {
-    disposeGizmo();
-    if (!selectedBuildObj || state.mode !== 'build') return;
-    var mode = objToolMode || 'move';
-    if (mode !== 'move' && mode !== 'scale') return;
-    var root = new THREE.Group();
-    root.userData.isGizmo = true;
-    root.renderOrder = 999;
-    if (mode === 'move') {
-      root.add(makeAxisArrow(0xff3333, 'x'));
-      root.add(makeAxisArrow(0x33ff66, 'y'));
-      root.add(makeAxisArrow(0x3388ff, 'z'));
-    } else {
-      // scale
-      root.add(makeScaleHandle(0xff3333, 'x'));
-      root.add(makeScaleHandle(0x33ff66, 'y'));
-      root.add(makeScaleHandle(0x3388ff, 'z'));
-    }
-    transformGizmo = root;
-    scene.add(transformGizmo);
-    syncGizmoTransform();
-  }
-
-  function syncGizmoTransform() {
-    if (!transformGizmo || !selectedBuildObj) return;
-    transformGizmo.position.copy(selectedBuildObj.position);
-    // keep gizmo readable size relative to camera distance
-    var dist = buildCamera.position.distanceTo(selectedBuildObj.position);
-    var s = Math.max(0.85, Math.min(3.2, dist * 0.1));
-    transformGizmo.scale.set(s, s, s);
-  }
-
-  function pickGizmo(raycaster) {
-    if (!transformGizmo) return null;
-    var hits = raycaster.intersectObject(transformGizmo, true);
-    if (!hits.length) return null;
-    // nearest hit with axis
-    for (var i = 0; i < hits.length; i++) {
-      var o = hits[i].object;
-      var guard = 0;
-      while (o && !o.userData.gizmoAxis && guard++ < 8) o = o.parent;
-      if (o && o.userData.gizmoAxis) return o.userData.gizmoAxis;
-    }
-    return null;
-  }
-
-  function setGizmoHover(axis) {
-    if (!transformGizmo) { gizmoHoverAxis = null; return; }
-    if (gizmoHoverAxis === axis) return;
-    gizmoHoverAxis = axis;
-    transformGizmo.children.forEach(function (child) {
-      var ax = child.userData && child.userData.gizmoAxis;
-      var active = ax && axis && ax === axis;
-      child.traverse(function (c) {
-        if (!c.isMesh || !c.material || c.material.visible === false) return;
-        if (c.userData && c.userData.isGizmo && c.material.color) {
-          // restore base color from axis
-          var base = ax === 'x' ? 0xff3333 : (ax === 'y' ? 0x33ff66 : 0x3388ff);
-          if (active) {
-            c.material.color.setHex(0xffffff);
-            c.material.opacity = 1;
-            if (c.geometry && c.geometry.type === 'CylinderGeometry') {
-              // thicken shaft slightly via scale
-              c.scale.set(1.55, 1, 1.55);
-            } else if (c.geometry && (c.geometry.type === 'ConeGeometry' || c.geometry.type === 'BoxGeometry')) {
-              c.scale.set(1.35, 1.35, 1.35);
-            }
-          } else {
-            c.material.color.setHex(base);
-            c.material.opacity = 0.98;
-            c.scale.set(1, 1, 1);
-          }
-        }
-      });
-    });
-    document.body.style.cursor = axis ? 'grab' : '';
-  }
-
   function selectBuildObject(obj) {
     if (selectedBuildObj && selectedBuildObj !== obj) {
       clearObjectHighlight(selectedBuildObj);
     }
     selectedBuildObj = obj;
     selectedHierarchyObj = obj;
-    isDraggingObj = false;
+    isDraggingObj = !!obj;
     objToolMode = obj ? 'move' : null;
     if (obj) {
       setObjectHighlight(obj, true);
       showObjToolbar(obj);
-      rebuildGizmo();
     } else {
       hideObjToolbar();
-      disposeGizmo();
     }
     refreshHierarchy();
-    updateScaleModeButtons();
   }
 
   function showObjToolbar(obj) {
@@ -3093,19 +2741,6 @@
     tb.style.top = (y - 50) + 'px';
   }
 
-  function updateScaleModeButtons() {
-    var tb = document.getElementById('obj-toolbar');
-    if (!tb) return;
-    var show = objToolMode === 'scale';
-    tb.querySelectorAll('.scale-mode-btn').forEach(function (b) {
-      if (show) b.classList.remove('hidden');
-      else b.classList.add('hidden');
-      var act = b.getAttribute('data-action');
-      if (act === 'scale-uniform') b.classList.toggle('active', state.scaleMode === 'uniform');
-      if (act === 'scale-axis') b.classList.toggle('active', state.scaleMode === 'axis');
-    });
-  }
-
   function bindObjToolbar() {
     var tb = document.getElementById('obj-toolbar');
     if (!tb) return;
@@ -3115,7 +2750,6 @@
         var action = btn.getAttribute('data-action');
         if (!selectedBuildObj) return;
         if (action === 'delete') {
-          disposeGizmo();
           scene.remove(selectedBuildObj);
           state.buildObjects = state.buildObjects.filter(function (o) { return o !== selectedBuildObj; });
           selectBuildObject(null);
@@ -3124,29 +2758,12 @@
           toast('تم الحذف', 'success');
           return;
         }
-        if (action === 'scale-uniform') {
-          state.scaleMode = 'uniform';
-          updateScaleModeButtons();
-          toast('تكبير كلي (كل المحاور معاً)', 'info');
-          return;
-        }
-        if (action === 'scale-axis') {
-          state.scaleMode = 'axis';
-          updateScaleModeButtons();
-          toast('تكبير محاور (X / Y / Z منفصل)', 'info');
-          return;
-        }
         objToolMode = action;
-        isDraggingObj = false;
-        gizmoDrag = null;
+        isDraggingObj = (action === 'move');
         tb.querySelectorAll('button').forEach(function (b) {
-          var a = b.getAttribute('data-action');
-          if (a === 'scale-uniform' || a === 'scale-axis') return;
-          b.classList.toggle('active', a === action);
+          b.classList.toggle('active', b.getAttribute('data-action') === action);
         });
-        updateScaleModeButtons();
-        rebuildGizmo();
-        var labels = { move: 'وضع التحريك — اسحب الأسهم', rotate: 'وضع الدوران', scale: 'وضع التكبير — اسحب المقابض' };
+        var labels = { move: 'وضع التحريك', rotate: 'وضع الدوران', scale: 'وضع التكبير' };
         toast(labels[action] || action, 'info');
       };
     });
@@ -3429,11 +3046,6 @@
         readCustomFromUI(idx);
         if (state.playType === 'online' && state.myNetId && typeof playerCustom !== 'undefined') {
           var msg = { type: 'custom', id: state.myNetId, custom: playerCustom[0], name: state.playerName };
-          if (state.netRoster) {
-            state.netRoster.forEach(function (r) {
-              if (r.id === state.myNetId) r.custom = playerCustom[0];
-            });
-          }
           if (state.useLan) lanSend(msg);
           else if (state.isHost) broadcastToAll(msg);
           else if (state.connection) try { state.connection.send(msg); } catch (e) {}
@@ -3482,18 +3094,8 @@
   document.getElementById('btn-leave-lobby').onclick = function () {
     if (state.playType === 'online' && state.myNetId) {
       var leaveMsg = { type: 'leave', id: state.myNetId, name: state.playerName || 'لاعب', isHost: !!state.isHost };
-      if (state.useLan) {
-        lanSend(leaveMsg);
-        if (state.isHost) {
-          try {
-            fetch(lanBaseUrl() + '/roommeta', {
-              method: 'POST',
-              headers: { 'Content-Type': 'application/json' },
-              body: JSON.stringify({ room: state.roomCode, close: true })
-            });
-          } catch (e) {}
-        }
-      } else broadcastToAll(leaveMsg);
+      if (state.useLan) lanSend(leaveMsg);
+      else broadcastToAll(leaveMsg);
     }
     stopLanPoll();
     if (state.peer) try { state.peer.destroy(); } catch (e) {}
@@ -3515,9 +3117,6 @@
         });
         if (navigator.sendBeacon) {
           navigator.sendBeacon(lanBaseUrl() + '/send', new Blob([payload], { type: 'application/json' }));
-          if (state.isHost) {
-            navigator.sendBeacon(lanBaseUrl() + '/roommeta', new Blob([JSON.stringify({ room: state.roomCode, close: true })], { type: 'application/json' }));
-          }
         }
       } catch (e) {}
     }
@@ -3637,31 +3236,6 @@
     var delta = rawDelta * (state.script.timeScale || 1);
     var gpInput = pollGamepad();
 
-    // FPS counter
-    state._fpsFrames = (state._fpsFrames || 0) + 1;
-    state._fpsAcc = (state._fpsAcc || 0) + rawDelta;
-    if (state._fpsAcc >= 0.4) {
-      var fps = Math.round(state._fpsFrames / state._fpsAcc);
-      state._fpsFrames = 0;
-      state._fpsAcc = 0;
-      var fpsNet = document.getElementById('fps-counter');
-      var fpsSolo = document.getElementById('fps-counter-solo');
-      var fpsHud = document.getElementById('fps-hud');
-      var netHud = document.getElementById('net-ping-hud');
-      var online = state.playType === 'online' && state.useLan && state._lanPollActive;
-      if (online) {
-        if (fpsNet) fpsNet.textContent = fps + ' FPS';
-        if (fpsHud) fpsHud.classList.add('hidden');
-        if (netHud) netHud.classList.remove('hidden');
-      } else {
-        if (fpsHud) {
-          fpsHud.classList.remove('hidden');
-          if (fpsSolo) fpsSolo.textContent = fps + ' FPS';
-        }
-        if (netHud) netHud.classList.add('hidden');
-      }
-    }
-
     if (state.mode === 'play') {
       // Per-player pause: only freeze the player who opened the menu
       var p0Paused = state.paused && (state.pauseOwner === 0 || state.pauseOwner === null && state.playType !== 'split');
@@ -3688,16 +3262,7 @@
       if (state.playType === 'online') {
         updateRemoteMeshes(delta);
         state.netPoseTimer = (state.netPoseTimer || 0) + rawDelta;
-        // Max send rate on LAN/Radmin (low ping); throttle only when ping is high
-        var ping = state.netPing || 40;
-        var poseInterval;
-        if (!state.useLan) poseInterval = 0.033;
-        else if (state.isHost) {
-          poseInterval = (ping > 600) ? 0.06 : ((ping > 200) ? 0.035 : 0.022); // ~45Hz host on good LAN
-        } else if (ping > 900) poseInterval = 0.16;
-        else if (ping > 500) poseInterval = 0.10;
-        else if (ping > 200) poseInterval = 0.055;
-        else poseInterval = 0.028; // ~35Hz joiner on LAN/Radmin
+        var poseInterval = state.useLan ? 0.05 : 0.033;
         if (state.netPoseTimer >= poseInterval) {
           state.netPoseTimer = 0;
           sendMyPose();
@@ -3749,10 +3314,7 @@
       }
     } else if (state.mode === 'build') {
       if (state.flyMode) updateFlyCamera(rawDelta);
-      if (selectedBuildObj) {
-        updateObjToolbarPos();
-        if (typeof syncGizmoTransform === 'function') syncGizmoTransform();
-      }
+      if (selectedBuildObj) updateObjToolbarPos();
       renderer.setViewport(0, 0, window.innerWidth, window.innerHeight);
       renderer.render(scene, buildCamera);
     } else {
@@ -3813,255 +3375,61 @@
 
   
   // ===== Pure LAN bus (no internet) via lan_host.py on host machine =====
-  function normalizeLanHost(raw) {
-    var s = (raw || '').trim();
-    if (!s) return 'http://127.0.0.1:27100';
-    // Full URL already
-    if (/^https?:\/\//i.test(s)) {
-      return s.replace(/\/$/, '');
-    }
-    // host:port
-    if (s.indexOf(':') !== -1 && s.indexOf('/') === -1) {
-      return 'http://' + s;
-    }
-    // bare domain/tunnel hostname (no port) — use as https if looks public, else http + default port
-    if (/^[a-z0-9.-]+\.[a-z]{2,}$/i.test(s) && !/^\d+\.\d+\.\d+\.\d+$/.test(s)) {
-      // trycloudflare / ngrok style hostnames
-      return 'https://' + s.replace(/\/$/, '');
-    }
-    // plain IP
-    return 'http://' + s + ':' + (state.lanPort || 27100);
-  }
-
   function lanBaseUrl() {
-    return normalizeLanHost(state.lanIp || '127.0.0.1');
+    var ip = (state.lanIp || '127.0.0.1').trim();
+    return 'http://' + ip + ':' + (state.lanPort || 27100);
   }
 
   function stopLanPoll() {
-    state._lanPollActive = false;
     if (state.lanPollTimer) {
-      clearTimeout(state.lanPollTimer);
+      clearInterval(state.lanPollTimer);
       state.lanPollTimer = null;
     }
-    if (state._lanAbort) {
-      try { state._lanAbort.abort(); } catch (e) {}
-      state._lanAbort = null;
-    }
-    if (typeof hidePingHud === 'function') hidePingHud();
   }
 
   function lanSend(data) {
     if (!state.useLan || !state.roomCode) return;
-    // Higher in-flight budget on LAN/Radmin (low ping) for max send rate
-    state._lanSendInflight = state._lanSendInflight || 0;
-    var maxInflight = (state.netPing > 800) ? 2 : ((state.netPing > 400) ? 4 : ((state.netPing > 120) ? 6 : 10));
-    if (state._lanSendInflight > maxInflight) return;
-    state._lanSendInflight++;
     fetch(lanBaseUrl() + '/send', {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ room: state.roomCode, data: data }),
-      cache: 'no-store',
-      keepalive: true
-    }).then(function () {
-      state._lanSendInflight = Math.max(0, state._lanSendInflight - 1);
-    }).catch(function () {
-      state._lanSendInflight = Math.max(0, state._lanSendInflight - 1);
-    });
-  }
-
-  function updatePingHud(ms) {
-    state.netPing = ms;
-    var hud = document.getElementById('net-ping-hud');
-    var bars = document.getElementById('wifi-bars');
-    var label = document.getElementById('ping-ms');
-    if (!hud || !bars || !label) return;
-    if (!(state.playType === 'online' && state.useLan && state._lanPollActive)) {
-      hud.classList.add('hidden');
-      return;
-    }
-    hud.classList.remove('hidden');
-    // bars: 5 best ... 1 worst
-    var level = 1;
-    if (ms <= 60) level = 5;
-    else if (ms <= 100) level = 4;
-    else if (ms <= 160) level = 3;
-    else if (ms <= 250) level = 2;
-    else level = 1;
-    state.netPingBars = level;
-    bars.className = 'wifi-bars level-' + level;
-    if (level >= 4) bars.classList.add('color-green');
-    else if (level >= 2) bars.classList.add('color-orange');
-    else bars.classList.add('color-red');
-    label.textContent = (ms > 0 ? Math.round(ms) : '--') + ' ms';
-    label.style.color = level >= 4 ? '#30d158' : (level >= 2 ? '#f59e0b' : '#ff2d55');
-    label.style.fontSize = '0.85rem';
-  }
-
-  function hidePingHud() {
-    var hud = document.getElementById('net-ping-hud');
-    if (hud) hud.classList.add('hidden');
+      body: JSON.stringify({ room: state.roomCode, data: data })
+    }).catch(function () {});
   }
 
   function lanPollOnce() {
-    if (!state.useLan || !state.roomCode || !state._lanPollActive) return;
-    if (state._lanAbort) {
-      try { state._lanAbort.abort(); } catch (e) {}
-    }
-    var ctrl = (typeof AbortController !== 'undefined') ? new AbortController() : null;
-    state._lanAbort = ctrl;
+    if (!state.useLan || !state.roomCode) return;
+    // avoid overlapping polls if previous request still pending
+    if (state._lanPollBusy) return;
+    state._lanPollBusy = true;
     var url = lanBaseUrl() + '/poll?room=' + encodeURIComponent(state.roomCode) + '&since=' + (state.lanSince || 0);
-    var finished = false;
-    var t0 = (typeof performance !== 'undefined' && performance.now) ? performance.now() : Date.now();
-    var watchdogMs = (state.netPing > 800) ? 3500 : ((state.netPing > 400) ? 2500 : 1500);
-    var watchdog = setTimeout(function () {
-      if (finished) return;
-      finished = true;
-      if (ctrl) try { ctrl.abort(); } catch (e) {}
-      if (state._lanPollActive) {
-        state.lanPollTimer = setTimeout(lanPollOnce, 60);
-      }
-    }, watchdogMs);
-
-    var opts = { cache: 'no-store' };
-    if (ctrl) opts.signal = ctrl.signal;
-
-    fetch(url, opts).then(function (r) { return r.json(); }).then(function (j) {
-      if (finished) return;
-      finished = true;
-      clearTimeout(watchdog);
-      var t1 = (typeof performance !== 'undefined' && performance.now) ? performance.now() : Date.now();
-      // EMA smooth ping so UI doesn't jump
-      var sample = t1 - t0;
-      state.netPing = state.netPing ? (state.netPing * 0.7 + sample * 0.3) : sample;
-      updatePingHud(state.netPing);
-
-      // Room closed only when server says dead (host heartbeat truly expired)
-      if (j && j.dead) {
-        if (!state.isHost) {
-          // Grace: ignore transient dead right after join (race with host register)
-          var joinedAt = state._lanJoinedAt || 0;
-          var age = Date.now() - joinedAt;
-          state._lanDeadStreak = (state._lanDeadStreak || 0) + 1;
-          if (age < 8000 && state._lanDeadStreak < 6) {
-            // keep polling — host may still be registering the room
-            if (state._lanPollActive) {
-              state.lanPollTimer = setTimeout(lanPollOnce, 400);
-            }
-            return;
-          }
-          toast('القائد خرج — الروم اتقفل', 'error');
-          stopLanPoll();
-          clearRemoteMeshes && clearRemoteMeshes();
-          state.useLan = false;
-          state.netRoster = [];
-          state.myNetId = null;
-          showScreen('menu');
-          showUI('main-menu');
+    fetch(url).then(function (r) { return r.json(); }).then(function (j) {
+      state._lanPollBusy = false;
+      if (!j || !j.messages) return;
+      j.messages.forEach(function (m) {
+        if (m.id > state.lanSince) state.lanSince = m.id;
+        if (!m.data) return;
+        var d = m.data;
+        // Skip own messages that would re-apply local state (movement/pose)
+        if (d.id && d.id === state.myNetId) {
+          // still allow welcome directed at us, but not own pose/custom echo
+          if (d.type === 'pose' || d.type === 'custom' || d.type === 'leave') return;
         }
-        return;
-      }
-
-      // Room not created yet — joiner raced host. Keep waiting, re-send join.
-      if (j && j.missing) {
-        state._lanMissingStreak = (state._lanMissingStreak || 0) + 1;
-        if (!state.isHost && state._lanMissingStreak % 4 === 1) {
-          try {
-            lanSend({
-              type: 'join',
-              clientId: state.myNetId,
-              name: state.playerName || 'لاعب',
-              custom: (typeof playerCustom !== 'undefined' ? playerCustom[0] : null)
-            });
-          } catch (e) {}
-        }
-        if (state._lanPollActive) {
-          state.lanPollTimer = setTimeout(lanPollOnce, 300);
-        }
-        return;
-      }
-
-      state._lanDeadStreak = 0;
-      state._lanMissingStreak = 0;
-
-      if (j && j.messages && j.messages.length) {
-        j.messages.forEach(function (m) {
-          if (m.id > (state.lanSince || 0)) state.lanSince = m.id;
-          if (!m.data) return;
-          var d = m.data;
-          if (d.type === 'pose') return;
-          if (d.id && d.id === state.myNetId) {
-            if (d.type === 'custom' || d.type === 'leave') return;
-          }
-          if (d.type === 'start' && state.mode === 'play') return;
-          handlePeerData(d, !!state.isHost, null);
-        });
-      }
-      if (j && j.poses && j.poses.length) {
-        j.poses.forEach(function (m) {
-          if (!m || !m.data) return;
-          if (m.id > (state.lanSince || 0)) state.lanSince = m.id;
-          var d = m.data;
-          if (d.id && d.id === state.myNetId) return;
-          handlePeerData(d, !!state.isHost, null);
-        });
-      }
-
-      // Host heartbeat: every poll in lobby, every ~4 polls in play (keeps room alive)
-      state._hostBeatTimer = (state._hostBeatTimer || 0) + 1;
-      var beatEvery = (state.mode === 'play') ? 4 : 1;
-      if (state.isHost && state._hostBeatTimer % beatEvery === 0) {
-        lanSend({
-          type: 'hostbeat',
-          isHost: true,
-          id: state.myNetId,
-          name: state.playerName || 'القائد',
-          players: (state.netRoster || []).length || 1
-        });
-      }
-
-      if (state._lanPollActive) {
-        // Max performance on LAN/Radmin (low ping): poll as fast as safe
-        var ping = state.netPing || 40;
-        var delay;
-        if (ping > 600) delay = 80;
-        else if (ping > 300) delay = 45;
-        else if (ping > 120) delay = 28;
-        else if (state.isHost) delay = 16;  // ~60Hz host on LAN
-        else delay = 20;                   // ~50Hz joiner on LAN
-        if (state.mode !== 'play') delay = Math.max(delay, 40);
-        if (typeof document !== 'undefined' && document.hidden) delay = Math.max(delay, 100);
-        state.lanPollTimer = setTimeout(lanPollOnce, delay);
-      }
-    }).catch(function () {
-      if (finished) return;
-      finished = true;
-      clearTimeout(watchdog);
-      if (state._lanPollActive) {
-        var delay = (state.netPing > 500) ? 120 : 80;
-        state.lanPollTimer = setTimeout(lanPollOnce, delay);
-      }
-    });
+        // Host must not re-process its own start as joiner logic
+        if (d.type === 'start' && state.mode === 'play') return;
+        // On pure LAN bus everyone sees everything — treat isHostSide only for host-specific join handling
+        handlePeerData(d, !!state.isHost, null);
+      });
+    }).catch(function () { state._lanPollBusy = false; });
   }
 
   function startLanPoll() {
     stopLanPoll();
     state.lanSince = 0;
-    state._lanSendInflight = 0;
-    state._lanPollActive = true;
+    state._lanPollBusy = false;
     lanPollOnce();
+    // 40ms ≈ 25Hz — enough for smooth remote players without flooding HTTP
+    state.lanPollTimer = setInterval(lanPollOnce, 40);
   }
-
-  // When tab becomes visible again, kick the network hard (Chrome throttles background tabs)
-  document.addEventListener('visibilitychange', function () {
-    if (!document.hidden && state.useLan && state._lanPollActive) {
-      if (state.lanPollTimer) { clearTimeout(state.lanPollTimer); state.lanPollTimer = null; }
-      lanPollOnce();
-      if (state.mode === 'play') {
-        try { sendMyPose(); } catch (e) {}
-      }
-    }
-  });
 
   function lanCheckHost(ip, cb) {
     var url = 'http://' + ip + ':' + (state.lanPort || 27100) + '/status';
@@ -4193,6 +3561,7 @@
     if (!d || d.id === state.myNetId) return;
     var mesh = ensureRemoteMesh(d.id, d.custom, d.name);
     if (!mesh) return;
+    // refresh clothes if custom changed
     if (d.custom && mesh.userData._customKey !== JSON.stringify(d.custom)) {
       var pos = mesh.position.clone();
       var rot = mesh.rotation.y;
@@ -4210,30 +3579,16 @@
       attachNameTag(mesh, d.name, true);
     }
     if (!state.remoteTargets) state.remoteTargets = {};
-    var prev = state.remoteTargets[d.id];
-    var nowT = (typeof performance !== 'undefined' && performance.now) ? performance.now() : Date.now();
-    // velocity from message or estimate from previous target
-    var vx = (d.vx != null) ? d.vx : 0;
-    var vz = (d.vz != null) ? d.vz : 0;
-    if (prev && prev._t) {
-      var dt = Math.max(0.016, (nowT - prev._t) / 1000);
-      if (d.vx == null) vx = (d.x - prev.x) / dt;
-      if (d.vz == null) vz = (d.z - prev.z) / dt;
-      // clamp crazy spikes from lag spikes
-      var spd = Math.sqrt(vx * vx + vz * vz);
-      if (spd > 25) { vx *= 25 / spd; vz *= 25 / spd; }
-    }
     state.remoteTargets[d.id] = {
       x: d.x, y: d.y || 0, z: d.z,
       yaw: (d.yaw || 0) + Math.PI,
       moving: !!d.moving,
-      vx: vx, vz: vz, vy: d.vy || 0,
-      _t: nowT,
       inVehicle: !!d.inVehicle,
       vehicleName: d.vehicleName || null,
       vehicleX: d.vehicleX, vehicleY: d.vehicleY, vehicleZ: d.vehicleZ,
       vehicleYaw: d.vehicleYaw
     };
+    // sync vehicle transform so other player sees the car move
     if (d.inVehicle && d.vehicleName) {
       for (var i = 0; i < state.buildObjects.length; i++) {
         var o = state.buildObjects[i];
@@ -4253,38 +3608,23 @@
   function updateRemoteMeshes(delta) {
     if (!state.remoteTargets) return;
     var ids = Object.keys(state.remoteTargets);
-    var ping = state.netPing || 100;
-    // With high ping, blend slower + extrapolate more so motion stays smooth
-    var lagSec = Math.min(0.8, (ping / 1000) * 0.45);
-    var followRate = ping > 400 ? 8 : (ping > 200 ? 14 : 22);
-    var snapDist2 = ping > 400 ? 36 : 16; // only snap if very far
-    var nowT = (typeof performance !== 'undefined' && performance.now) ? performance.now() : Date.now();
     for (var i = 0; i < ids.length; i++) {
       var id = ids[i];
       var mesh = state.remoteMeshes[id];
       var t = state.remoteTargets[id];
       if (!mesh || !t) continue;
-      // Extrapolate target forward using velocity (dead reckoning)
-      var age = t._t ? Math.min(1.4, (nowT - t._t) / 1000) : 0;
-      // damp velocity over time so we don't fly forever on stale data
-      var damp = age > 0.5 ? Math.max(0.15, 1 - (age - 0.5) * 1.2) : 1;
-      var ex = t.x + (t.vx || 0) * (age * damp + lagSec * 0.55);
-      var ey = t.y;
-      var ez = t.z + (t.vz || 0) * (age * damp + lagSec * 0.55);
-      var dx = ex - mesh.position.x;
-      var dy = ey - mesh.position.y;
-      var dz = ez - mesh.position.z;
+      var dx = t.x - mesh.position.x;
+      var dy = t.y - mesh.position.y;
+      var dz = t.z - mesh.position.z;
       var dist2 = dx * dx + dy * dy + dz * dz;
-      if (dist2 > snapDist2) {
-        // soft catch-up instead of hard teleport when laggy
-        var catchUp = Math.min(1, 0.35);
-        mesh.position.x += dx * catchUp;
-        mesh.position.y += dy * catchUp;
-        mesh.position.z += dz * catchUp;
+      // snap if too far (first pose / lag spike)
+      if (dist2 > 25) {
+        mesh.position.set(t.x, t.y, t.z);
       } else {
-        var lerp = Math.min(1, followRate * delta);
+        // smoother + faster follow so jump/move feels responsive on LAN
+        var lerp = Math.min(1, 22 * delta);
         mesh.position.x += dx * lerp;
-        mesh.position.y += dy * Math.min(1, (followRate + 10) * delta);
+        mesh.position.y += dy * Math.min(1, 28 * delta);
         mesh.position.z += dz * lerp;
       }
       var cy = mesh.rotation.y;
@@ -4292,7 +3632,8 @@
       var dYaw = ty - cy;
       while (dYaw > Math.PI) dYaw -= Math.PI * 2;
       while (dYaw < -Math.PI) dYaw += Math.PI * 2;
-      mesh.rotation.y = cy + dYaw * Math.min(1, 12 * delta);
+      mesh.rotation.y = cy + dYaw * Math.min(1, 20 * delta);
+      // walk anim if moving
       if (t.moving && mesh.userData && mesh.userData.leftArm) {
         mesh.userData.walkCycle = (mesh.userData.walkCycle || 0) + delta * 10;
         var s = Math.sin(mesh.userData.walkCycle) * 0.5;
@@ -4326,56 +3667,24 @@
       state._lastSentCustomKey = customKey;
       sendCustom = custom;
     }
-    // compact pose + velocity for high-ping extrapolation
-    var px = p.group.position.x, py = p.group.position.y, pz = p.group.position.z;
-    var prev = state._lastPosePos || { x: px, y: py, z: pz, t: 0 };
-    var nowP = (typeof performance !== 'undefined' && performance.now) ? performance.now() : Date.now();
-    var dtP = Math.max(0.016, (nowP - (prev.t || nowP)) / 1000);
-    var vx = (px - prev.x) / dtP;
-    var vz = (pz - prev.z) / dtP;
-    state._lastPosePos = { x: px, y: py, z: pz, t: nowP };
     var msg = {
       type: 'pose',
       id: state.myNetId,
-      x: Math.round(px * 100) / 100,
-      y: Math.round(py * 100) / 100,
-      z: Math.round(pz * 100) / 100,
-      yaw: Math.round(p.yaw * 1000) / 1000,
+      name: state.playerName || 'لاعب',
+      x: p.group.position.x,
+      y: p.group.position.y,
+      z: p.group.position.z,
+      yaw: p.yaw,
       moving: moving,
-      vx: Math.round(vx * 100) / 100,
-      vz: Math.round(vz * 100) / 100
+      airborne: airborne,
+      inVehicle: !!p.vehicle,
+      vehicleName: (p.vehicle && p.vehicle.userData) ? (p.vehicle.userData.instanceName || null) : null,
+      vehicleX: p.vehicle ? p.vehicle.position.x : null,
+      vehicleY: p.vehicle ? p.vehicle.position.y : null,
+      vehicleZ: p.vehicle ? p.vehicle.position.z : null,
+      vehicleYaw: p.vehicle ? p.vehicle.rotation.y : null
     };
-    if (state.isHost) msg.isHost = true;
-    // name only occasionally (every ~1s) to save bandwidth
-    state._nameTick = (state._nameTick || 0) + 1;
-    if (state._nameTick === 1 || state._nameTick % 40 === 0) {
-      msg.name = state.playerName || 'لاعب';
-    }
-    if (p.vehicle) {
-      msg.inVehicle = true;
-      msg.vehicleName = (p.vehicle.userData && p.vehicle.userData.instanceName) || null;
-      msg.vehicleX = Math.round(p.vehicle.position.x * 100) / 100;
-      msg.vehicleY = Math.round(p.vehicle.position.y * 100) / 100;
-      msg.vehicleZ = Math.round(p.vehicle.position.z * 100) / 100;
-      msg.vehicleYaw = Math.round(p.vehicle.rotation.y * 1000) / 1000;
-    }
     if (sendCustom) msg.custom = sendCustom;
-    // High-ping sacrifice: skip tiny movements to cut traffic
-    if (state.useLan && (state.netPing || 0) > 400) {
-      var lp = state._lastSentPose;
-      if (lp) {
-        var ddx = msg.x - lp.x, ddz = msg.z - lp.z;
-        var dyaw = Math.abs((msg.yaw || 0) - (lp.yaw || 0));
-        var minMove = (state.netPing > 800) ? 0.35 : 0.18;
-        if (ddx * ddx + ddz * ddz < minMove * minMove && dyaw < 0.08 && !msg.inVehicle) {
-          // still heartbeat occasionally
-          state._poseSkip = (state._poseSkip || 0) + 1;
-          if (state._poseSkip < 4) return;
-        }
-      }
-      state._poseSkip = 0;
-      state._lastSentPose = { x: msg.x, z: msg.z, yaw: msg.yaw };
-    }
     if (state.useLan) {
       lanSend(msg);
     } else if (state.isHost) {
@@ -4688,18 +3997,16 @@
   };
 
   function checkLanServer(ip, cb) {
-    var base = normalizeLanHost(ip || '127.0.0.1');
-    var url = base + '/status';
+    var host = (ip || '127.0.0.1').trim() || '127.0.0.1';
+    var port = state.lanPort || 27100;
+    var url = 'http://' + host + ':' + port + '/status';
     var done = false;
     var t = setTimeout(function () {
       if (done) return;
       done = true;
       cb(false, null);
-    }, 3500);
-    fetch(url, { cache: 'no-store', mode: 'cors' }).then(function (r) {
-      if (!r.ok) throw new Error('bad status');
-      return r.json();
-    }).then(function (j) {
+    }, 2500);
+    fetch(url, { cache: 'no-cache' }).then(function (r) { return r.json(); }).then(function (j) {
       if (done) return;
       done = true;
       clearTimeout(t);
@@ -4712,109 +4019,40 @@
     });
   }
 
-  // Live IP/host detection with clear Arabic messages
-  function setIpStatusEl(el, kind, text) {
-    if (!el) return;
-    el.textContent = text || '';
-    if (kind === 'ok') el.style.color = '#30d158';
-    else if (kind === 'err') el.style.color = '#ff6b8a';
-    else if (kind === 'wait') el.style.color = '#94a3b8';
-    else el.style.color = '#94a3b8';
-  }
-
-  function probeServerAndShow(ip, statusElId, onResult) {
-    var el = document.getElementById(statusElId);
-    var addr = (ip || '').trim();
-    if (!addr) {
-      setIpStatusEl(el, 'err', 'اكتب العنوان أولاً');
-      if (onResult) onResult(false, null);
-      return;
-    }
-    setIpStatusEl(el, 'wait', 'جاري التعرف على الخادم...');
-    checkLanServer(addr, function (ok, info) {
-      if (ok) {
-        setIpStatusEl(el, 'ok', '✓ تم التعرف على وجود الخادم');
-        if (info && info.ips && info.ips.length) state._detectedLanIps = info.ips;
-        state._lastCheckedLanIp = addr;
-      } else {
-        setIpStatusEl(el, 'err', '✗ مش واصل — تأكد إن python lan_host.py شغال والعنوان صح (Radmin / LAN)');
-      }
-      if (onResult) onResult(ok, info);
-    });
-  }
-
-  function wireIpLiveCheck(inputId, statusId) {
-    var inp = document.getElementById(inputId);
-    if (!inp) return;
-    var timer = null;
-    function schedule() {
-      if (timer) clearTimeout(timer);
-      timer = setTimeout(function () {
-        var v = (inp.value || '').trim();
-        if (v.length >= 3) probeServerAndShow(v, statusId);
-        else setIpStatusEl(document.getElementById(statusId), 'wait', '');
-      }, 550);
-    }
-    inp.addEventListener('input', schedule);
-    inp.addEventListener('blur', function () {
-      var v = (inp.value || '').trim();
-      if (v) probeServerAndShow(v, statusId);
-    });
-  }
-
-  function runServerCheck(ip) {
+  var btnOnline = document.getElementById('btn-online-mode');
+  if (btnOnline) btnOnline.onclick = function () {
+    showUI('online-confirm');
     var st = document.getElementById('server-check-status');
     var okBtn = document.getElementById('btn-online-ok');
-    ip = (ip || '127.0.0.1').trim();
-    if (st) { st.textContent = 'جاري فحص السيرفر على ' + ip + ' ...'; st.style.color = '#94a3b8'; }
+    if (st) { st.textContent = 'جاري فحص السيرفر على 127.0.0.1 ...'; st.style.color = '#94a3b8'; }
     if (okBtn) { okBtn.disabled = true; okBtn.textContent = 'جاري الفحص...'; }
-    checkLanServer(ip, function (ok, info) {
+    // Try localhost first (host machine), user can still enter other IP later
+    checkLanServer('127.0.0.1', function (ok, info) {
       if (ok) {
-        if (st) { st.textContent = 'السيرفر شغال ✓ على ' + ip; st.style.color = '#30d158'; }
+        if (st) { st.textContent = 'السيرفر شغال ✓ — تقدر تكمل'; st.style.color = '#30d158'; }
         if (okBtn) { okBtn.disabled = false; okBtn.textContent = 'موافق — متابعة'; }
-        state._lastCheckedLanIp = ip;
-        if (info && info.ips && info.ips.length) state._detectedLanIps = info.ips;
-        // prefill create/join IP fields
-        var ci = document.getElementById('create-ip-input');
-        var ji = document.getElementById('join-ip-input');
-        if (ci) ci.value = ip;
-        if (ji) ji.value = ip;
+        if (info && info.ips && info.ips.length) {
+          state._detectedLanIps = info.ips;
+        }
       } else {
         if (st) {
-          st.innerHTML = 'السيرفر مش شغال على ' + ip + ' ❌<br><span style="font-weight:500;font-size:0.85rem">القائد: شغّل python lan_host.py ثم cloudflared tunnel --url http://localhost:27100<br>المنضم: الصق نفس رابط trycloudflare.com أو IP القائد</span>';
+          st.innerHTML = 'السيرفر مش شغال ❌<br><span style="font-weight:500;font-size:0.85rem">شغّل python lan_host.py وافتح server.html</span>';
           st.style.color = '#ff6b8a';
         }
         if (okBtn) { okBtn.disabled = true; okBtn.textContent = 'السيرفر مش شغال بعد'; }
       }
     });
-  }
-
-  var btnOnline = document.getElementById('btn-online-mode');
-  if (btnOnline) btnOnline.onclick = function () {
-    // مباشرة للـ hub — اختيار LAN / كلاودفير داخل إنشاء أو انضمام
-    showUI('online-hub');
-    var hub = document.getElementById('hub-server-status');
-    if (hub) hub.textContent = 'القائد يشغّل: python lan_host.py — LAN بدون نت أو كلاودفير للإنترنت';
-  };
-
-  var btnCheckServer = document.getElementById('btn-check-server');
-  if (btnCheckServer) btnCheckServer.onclick = function () {
-    var ipEl = document.getElementById('confirm-server-ip');
-    var ip = (ipEl && ipEl.value) ? ipEl.value.trim() : '';
-    if (!ip) { toast('اكتب IP السيرفر', 'error'); return; }
-    runServerCheck(ip);
   };
 
   var btnOnlineOk = document.getElementById('btn-online-ok');
   if (btnOnlineOk) btnOnlineOk.onclick = function () {
     if (btnOnlineOk.disabled) {
-      toast('افحص السيرفر أولًا بـ IP الصحيح', 'error');
+      toast('شغّل السيرفر أولًا (python lan_host.py)', 'error');
       return;
     }
     showUI('online-hub');
     var hub = document.getElementById('hub-server-status');
-    var ip = state._lastCheckedLanIp || '127.0.0.1';
-    if (hub) hub.textContent = 'السيرفر متصل ✓ (' + ip + ')';
+    if (hub) hub.textContent = 'السيرفر متصل ✓';
   };
 
   var btnOnlineCancel = document.getElementById('btn-online-cancel');
@@ -4826,156 +4064,23 @@
   var btnOnlineHubBack = document.getElementById('btn-online-hub-back');
   if (btnOnlineHubBack) btnOnlineHubBack.onclick = function () { showUI('story-choice'); };
 
-  // ---- Create room: LAN vs Cloud mode ----
-  state._createNetMode = null; // 'lan' | 'cloud'
-  state._joinNetMode = null;
-
-  function setCreateNetMode(mode) {
-    state._createNetMode = mode;
-    var lanP = document.getElementById('create-lan-panel');
-    var cloudP = document.getElementById('create-cloud-panel');
-    var btnLan = document.getElementById('btn-create-mode-lan');
-    var btnCloud = document.getElementById('btn-create-mode-cloud');
-    var doBtn = document.getElementById('btn-do-create');
-    // Always show exactly one panel when a mode is chosen
-    if (lanP) {
-      if (mode === 'lan') lanP.classList.remove('hidden');
-      else lanP.classList.add('hidden');
-    }
-    if (cloudP) {
-      if (mode === 'cloud') cloudP.classList.remove('hidden');
-      else cloudP.classList.add('hidden');
-    }
-    if (btnLan) {
-      btnLan.className = mode === 'lan' ? 'btn btn-success' : 'btn btn-ghost';
-      btnLan.style.flex = '1';
-      btnLan.style.minWidth = '140px';
-    }
-    if (btnCloud) {
-      btnCloud.className = mode === 'cloud' ? 'btn btn-accent' : 'btn btn-ghost';
-      btnCloud.style.flex = '1';
-      btnCloud.style.minWidth = '140px';
-    }
-    if (doBtn) {
-      if (!mode) {
-        doBtn.disabled = true;
-        doBtn.textContent = 'اختر LAN أو كلاودفير أولاً';
-      } else {
-        doBtn.disabled = false;
-        doBtn.textContent = mode === 'lan' ? 'تأكيد وإنشاء (LAN / Radmin)' : 'تأكيد وإنشاء (كلاودفير)';
-      }
-    }
-    if (mode === 'lan') {
-      var ipEl = document.getElementById('create-ip-input');
-      if (ipEl && (!ipEl.value || ipEl.value === '')) ipEl.value = '127.0.0.1';
-      var hint = document.getElementById('create-lan-hint');
-      if (hint && state._detectedLanIps && state._detectedLanIps.length) {
-        hint.textContent = 'IP جهازك المحتمل: ' + state._detectedLanIps.join(' · ') + ' — أعطِه لصحابك (LAN أو Radmin)';
-      }
-      // auto-probe current value
-      if (ipEl && ipEl.value) probeServerAndShow(ipEl.value, 'create-ip-status');
-    } else if (mode === 'cloud') {
-      var cEl = document.getElementById('create-cloud-input');
-      if (cEl && cEl.value) probeServerAndShow(cEl.value, 'create-cloud-status');
-    }
-  }
-
-  function setJoinNetMode(mode) {
-    state._joinNetMode = mode;
-    var lanP = document.getElementById('join-lan-panel');
-    var cloudP = document.getElementById('join-cloud-panel');
-    var btnLan = document.getElementById('btn-join-mode-lan');
-    var btnCloud = document.getElementById('btn-join-mode-cloud');
-    if (lanP) {
-      if (mode === 'lan') lanP.classList.remove('hidden');
-      else lanP.classList.add('hidden');
-    }
-    if (cloudP) {
-      if (mode === 'cloud') cloudP.classList.remove('hidden');
-      else cloudP.classList.add('hidden');
-    }
-    if (btnLan) {
-      btnLan.className = mode === 'lan' ? 'btn btn-success' : 'btn btn-ghost';
-      btnLan.style.flex = '1';
-      btnLan.style.minWidth = '140px';
-    }
-    if (btnCloud) {
-      btnCloud.className = mode === 'cloud' ? 'btn btn-accent' : 'btn btn-ghost';
-      btnCloud.style.flex = '1';
-      btnCloud.style.minWidth = '140px';
-    }
-    if (mode === 'lan') {
-      var ji = document.getElementById('join-ip-input');
-      if (ji && ji.value) probeServerAndShow(ji.value, 'join-ip-status');
-    } else if (mode === 'cloud') {
-      var jc = document.getElementById('join-cloud-input');
-      if (jc && jc.value) probeServerAndShow(jc.value, 'join-cloud-status');
-    }
-  }
-
-  // زر الجرافيكس في القائمة الرئيسية
-  var btnMenuGfx = document.getElementById('btn-menu-graphics');
-  if (btnMenuGfx) btnMenuGfx.onclick = function () {
-    var sel = document.getElementById('set-graphics');
-    if (sel) sel.value = String(state.graphicsLevel || 3);
-    var hint = document.getElementById('graphics-hint');
-    if (hint && sel) {
-      var hints = {
-        1: 'الجرافيكس الحقير — أعلى فريمات لأضعف الأجهزة',
-        2: 'جرافيكس منخفض — أجهزة ضعيفة',
-        3: 'جرافيكس متوسط — توازن الشكل والأداء',
-        4: 'جرافيكس عالي — أجهزة قوية',
-        5: 'الجرافيكس الأسطوري — أقصى جودة'
-      };
-      hint.textContent = hints[parseInt(sel.value, 10)] || '';
-    }
-    var sp = document.getElementById('settings-panel');
-    if (sp) sp.classList.remove('hidden');
-    // لو مش في pause، رجوع يخفي فقط
-  };
-
-  var btnCreateModeLan = document.getElementById('btn-create-mode-lan');
-  if (btnCreateModeLan) btnCreateModeLan.onclick = function () { setCreateNetMode('lan'); };
-  var btnCreateModeCloud = document.getElementById('btn-create-mode-cloud');
-  if (btnCreateModeCloud) btnCreateModeCloud.onclick = function () { setCreateNetMode('cloud'); };
-  var btnJoinModeLan = document.getElementById('btn-join-mode-lan');
-  if (btnJoinModeLan) btnJoinModeLan.onclick = function () { setJoinNetMode('lan'); };
-  var btnJoinModeCloud = document.getElementById('btn-join-mode-cloud');
-  if (btnJoinModeCloud) btnJoinModeCloud.onclick = function () { setJoinNetMode('cloud'); };
-
-  // Live server detection under IP fields
-  wireIpLiveCheck('create-ip-input', 'create-ip-status');
-  wireIpLiveCheck('create-cloud-input', 'create-cloud-status');
-  wireIpLiveCheck('join-ip-input', 'join-ip-status');
-  wireIpLiveCheck('join-cloud-input', 'join-cloud-status');
-
   var btnOnlineCreate = document.getElementById('btn-online-create');
   if (btnOnlineCreate) btnOnlineCreate.onclick = function () {
-    state._createNetMode = null;
-    setCreateNetMode(null);
-    // reset panels
-    var lanP = document.getElementById('create-lan-panel');
-    var cloudP = document.getElementById('create-cloud-panel');
-    if (lanP) lanP.classList.add('hidden');
-    if (cloudP) cloudP.classList.add('hidden');
-    var doBtn = document.getElementById('btn-do-create');
-    if (doBtn) { doBtn.disabled = true; doBtn.textContent = 'اختر LAN أو كلاودفير أولاً'; }
     showUI('create-room');
-    // quick probe localhost to fill detected IPs for LAN hint
-    checkLanServer('127.0.0.1', function (ok, info) {
-      if (ok && info && info.ips) state._detectedLanIps = info.ips;
-    });
+    var ipEl = document.getElementById('create-ip-input');
+    if (ipEl && state._detectedLanIps && state._detectedLanIps.length) {
+      // prefer first non-empty detected IP
+      ipEl.value = state._detectedLanIps[0];
+    }
   };
 
   var btnOnlineJoin = document.getElementById('btn-online-join');
   if (btnOnlineJoin) btnOnlineJoin.onclick = function () {
-    state._joinNetMode = null;
-    setJoinNetMode(null);
-    var lanP = document.getElementById('join-lan-panel');
-    var cloudP = document.getElementById('join-cloud-panel');
-    if (lanP) lanP.classList.add('hidden');
-    if (cloudP) cloudP.classList.add('hidden');
     showUI('join-room');
+    var ipEl = document.getElementById('join-ip-input');
+    if (ipEl && state._detectedLanIps && state._detectedLanIps.length && (!ipEl.value || ipEl.value === '127.0.0.1')) {
+      ipEl.value = state._detectedLanIps[0];
+    }
   };
 
   var btnCreateBack = document.getElementById('btn-create-back');
@@ -4995,7 +4100,7 @@
     state.myNetId = isHost ? ('host_' + code) : null;
     clearRemoteMeshes();
 
-    document.getElementById('lobby-title').textContent = isHost ? '⚔️ لوبي القائد (سيرفر)' : '⚔️ لوبي المنضم';
+    document.getElementById('lobby-title').textContent = isHost ? '⚔️ لوبي القائد (LAN)' : '⚔️ لوبي المنضم';
     document.getElementById('lobby-code-display').style.display = 'block';
     document.getElementById('lobby-code-display').textContent = 'الرمز: ' + code;
     document.getElementById('gamepad-hint').textContent = isHost
@@ -5166,16 +4271,7 @@
     state.connections = [];
     state.connection = null;
     state.myNetId = isHost ? ('host_' + code) : ('p_' + Date.now().toString(36));
-    state.netRoster = isHost ? [{
-      id: state.myNetId,
-      name: state.playerName || 'القائد',
-      isHost: true,
-      custom: (typeof playerCustom !== 'undefined' ? playerCustom[0] : null)
-    }] : [];
-    state._lanJoinedAt = Date.now();
-    state._lanDeadStreak = 0;
-    state._lanMissingStreak = 0;
-    state._hostBeatTimer = 0;
+    state.netRoster = isHost ? [{ id: state.myNetId, name: state.playerName || 'القائد', isHost: true }] : [];
     clearRemoteMeshes();
     stopLanPoll();
 
@@ -5197,37 +4293,10 @@
     configureCustomUIForMode();
     renderNetLobbyList();
     showScreen('lobby');
+    startLanPoll();
 
-    if (isHost) {
-      // Register room FIRST, then start polling (prevents joiner race → false "room closed")
-      var registerHost = function () {
-        try {
-          fetch(lanBaseUrl() + '/roommeta', {
-            method: 'POST',
-            headers: { 'Content-Type': 'application/json' },
-            body: JSON.stringify({
-              room: code,
-              host: state.playerName || 'القائد',
-              host_id: state.myNetId,
-              players: 1,
-              playing: false,
-              visible: true
-            }),
-            cache: 'no-store'
-          }).catch(function () {});
-        } catch (e) {}
-        lanSend({ type: 'hostbeat', isHost: true, id: state.myNetId, name: state.playerName || 'القائد', players: 1 });
-      };
-      registerHost();
-      // Retry registration a few times so room is solid before friends join
-      setTimeout(registerHost, 250);
-      setTimeout(registerHost, 800);
-      setTimeout(registerHost, 1800);
-      startLanPoll();
-      toast('لوبي LAN/Radmin جاهز — أعطِ أصحابك الـ IP والرمز', 'success');
-    } else {
-      startLanPoll();
-      var sendJoin = function () {
+    if (!isHost) {
+      setTimeout(function () {
         try { readCustomFromUI && readCustomFromUI(0); } catch (e) {}
         lanSend({
           type: 'join',
@@ -5235,148 +4304,55 @@
           name: state.playerName || 'لاعب',
           custom: (typeof playerCustom !== 'undefined' ? playerCustom[0] : null)
         });
-      };
-      setTimeout(sendJoin, 150);
-      setTimeout(sendJoin, 700);
-      setTimeout(sendJoin, 1600);
-      toast('جاري الانضمام عبر السيرفر...', 'info');
-      document.getElementById('gamepad-hint').textContent = 'متصل عبر LAN — بانتظار القائد';
-      document.getElementById('btn-start-game').disabled = true;
-      document.getElementById('btn-start-game').textContent = 'في انتظار القائد...';
+        toast('انضممت عبر LAN', 'success');
+        document.getElementById('gamepad-hint').textContent = 'متصل عبر LAN — بانتظار القائد';
+        document.getElementById('btn-start-game').disabled = true;
+        document.getElementById('btn-start-game').textContent = 'في انتظار القائد...';
+      }, 200);
+    } else {
+      toast('لوبي LAN جاهز — من غير إنترنت', 'success');
     }
   }
 
   var btnDoCreate = document.getElementById('btn-do-create');
   if (btnDoCreate) btnDoCreate.onclick = function () {
     var code = (document.getElementById('create-code-input').value || '').trim().toLowerCase().replace(/\s+/g, '');
-    var mode = state._createNetMode;
-    if (!mode) { toast('اختر LAN / Radmin أو كلاودفير أولاً', 'error'); return; }
-    var ip = '';
-    var statusId = mode === 'lan' ? 'create-ip-status' : 'create-cloud-status';
-    if (mode === 'lan') {
-      ip = (document.getElementById('create-ip-input') && document.getElementById('create-ip-input').value || '127.0.0.1').trim();
-    } else {
-      ip = (document.getElementById('create-cloud-input') && document.getElementById('create-cloud-input').value || '').trim();
-    }
+    var ip = (document.getElementById('create-ip-input') && document.getElementById('create-ip-input').value || '127.0.0.1').trim();
     if (!code || code.length < 2) { toast('اكتب رمز صالح', 'error'); return; }
-    if (!ip) { toast(mode === 'lan' ? 'اكتب IP المحلي أو Radmin' : 'الصق رابط الكلاودفير', 'error'); return; }
+    if (!ip) { toast('اكتب IP السيرفر', 'error'); return; }
     if (!createZipReady) {
       toast('ارفع الملف الشامل أولاً', 'error');
       if (createUploadInput) createUploadInput.click();
       return;
     }
-    toast(mode === 'lan' ? 'جاري التعرف على الخادم (LAN/Radmin)...' : 'جاري التعرف على الخادم (كلاودفير)...', 'info');
-    probeServerAndShow(ip, statusId, function (ok, info) {
+    toast('جاري التحقق من السيرفر...', 'info');
+    checkLanServer(ip, function (ok) {
       if (!ok) {
-        toast(mode === 'lan'
-          ? '✗ مش واصل — شغّل python lan_host.py وتأكد من IP (Radmin أو LAN)'
-          : '✗ مش واصل — تأكد من python lan_host.py + cloudflared tunnel', 'error');
+        toast('السيرفر مش شغال على ' + ip + ' — شغّل python lan_host.py', 'error');
         return;
       }
-      toast('✓ تم التعرف على وجود الخادم', 'success');
-      if (info && info.ips) state._detectedLanIps = info.ips;
+      // الأونلاين = LAN فقط عبر lan_host (مفيش PeerJS منفصل)
       setupLanLobby(true, code, ip);
-      toast(mode === 'lan' ? 'لوبي LAN/Radmin جاهز — أعطِ أصحابك الـ IP والرمز' : 'لوبي كلاودفير جاهز — أعطِ الرابط والرمز', 'success');
     });
   };
-
-
-  // ===== Available rooms list (join) =====
-  var selectedListedRoom = null;
-  function setJoinTab(mode) {
-    var byCode = document.getElementById('join-by-code');
-    var byList = document.getElementById('join-by-list');
-    var tabCode = document.getElementById('btn-join-tab-code');
-    var tabList = document.getElementById('btn-join-tab-list');
-    if (!byCode || !byList) return;
-    if (mode === 'list') {
-      byCode.classList.add('hidden');
-      byList.classList.remove('hidden');
-      if (tabCode) { tabCode.classList.remove('btn-primary'); tabCode.classList.add('btn-ghost'); }
-      if (tabList) { tabList.classList.add('btn-primary'); tabList.classList.remove('btn-ghost'); }
-      refreshRoomsList();
-    } else {
-      byList.classList.add('hidden');
-      byCode.classList.remove('hidden');
-      if (tabList) { tabList.classList.remove('btn-primary'); tabList.classList.add('btn-ghost'); }
-      if (tabCode) { tabCode.classList.add('btn-primary'); tabCode.classList.remove('btn-ghost'); }
-    }
-  }
-  function getJoinServerAddress() {
-    if (state._joinNetMode === 'cloud') {
-      return (document.getElementById('join-cloud-input') && document.getElementById('join-cloud-input').value || '').trim();
-    }
-    return (document.getElementById('join-ip-input') && document.getElementById('join-ip-input').value || '').trim();
-  }
-
-  function refreshRoomsList() {
-    var list = document.getElementById('rooms-list');
-    var empty = document.getElementById('rooms-list-empty');
-    var ip = getJoinServerAddress() || '127.0.0.1';
-    if (!list) return;
-    list.innerHTML = '';
-    if (empty) empty.textContent = 'جاري التحميل...';
-    var base = normalizeLanHost(ip);
-    fetch(base + '/rooms', { cache: 'no-store' }).then(function (r) { return r.json(); }).then(function (j) {
-      list.innerHTML = '';
-      var rooms = (j && j.rooms) || [];
-      if (!rooms.length) {
-        if (empty) empty.textContent = 'مفيش رومات ظاهرة — تأكد إن القائد أنشأ لوبي والسيرفر شغال';
-        return;
-      }
-      if (empty) empty.textContent = '';
-      rooms.forEach(function (rm) {
-        var card = document.createElement('div');
-        card.className = 'room-card';
-        if (selectedListedRoom === rm.code) card.classList.add('selected');
-        var status = rm.playing ? '● في اللعب' : '○ في اللوبي';
-        card.innerHTML = '<div class="rc-code">' + rm.code + '</div>' +
-          '<div class="rc-meta">' + (rm.host ? ('القائد: ' + rm.host + ' · ') : '') +
-          'لاعبين: ' + (rm.players || '?') + ' · ' + status + '</div>';
-        card.onclick = function () {
-          selectedListedRoom = rm.code;
-          var inp = document.getElementById('join-code-input');
-          if (inp) inp.value = rm.code;
-          list.querySelectorAll('.room-card').forEach(function (c) { c.classList.remove('selected'); });
-          card.classList.add('selected');
-          toast('تم اختيار الروم: ' + rm.code, 'info');
-        };
-        list.appendChild(card);
-      });
-    }).catch(function () {
-      if (empty) empty.textContent = 'فشل جلب الرومات — تأكد من عنوان السيرفر';
-    });
-  }
-  var btnJoinTabCode = document.getElementById('btn-join-tab-code');
-  if (btnJoinTabCode) btnJoinTabCode.onclick = function () { setJoinTab('code'); };
-  var btnJoinTabList = document.getElementById('btn-join-tab-list');
-  if (btnJoinTabList) btnJoinTabList.onclick = function () { setJoinTab('list'); };
-  var btnRefreshRooms = document.getElementById('btn-refresh-rooms');
-  if (btnRefreshRooms) btnRefreshRooms.onclick = function () { refreshRoomsList(); };
 
   var btnDoJoin = document.getElementById('btn-do-join');
   if (btnDoJoin) btnDoJoin.onclick = function () {
     var code = (document.getElementById('join-code-input').value || '').trim().toLowerCase().replace(/\s+/g, '');
-    var mode = state._joinNetMode;
-    if (!mode) { toast('اختر LAN / Radmin أو كلاودفير أولاً', 'error'); return; }
-    var ip = getJoinServerAddress();
-    var statusId = mode === 'lan' ? 'join-ip-status' : 'join-cloud-status';
-    if (!code || code.length < 2) { toast('اكتب رمز الروم أو اختر من القائمة', 'error'); return; }
-    if (!ip) { toast(mode === 'lan' ? 'اكتب IP جهاز القائد (LAN أو Radmin)' : 'الصق رابط الكلاودفير', 'error'); return; }
+    var ip = (document.getElementById('join-ip-input') && document.getElementById('join-ip-input').value || '127.0.0.1').trim();
+    if (!code || code.length < 2) { toast('اكتب رمز الروم', 'error'); return; }
+    if (!ip) { toast('اكتب IP السيرفر', 'error'); return; }
     if (!joinZipReady) {
       toast('ارفع الملف الشامل أولاً', 'error');
       if (joinUploadInput) joinUploadInput.click();
       return;
     }
-    toast(mode === 'lan' ? 'جاري التعرف على الخادم (LAN/Radmin)...' : 'جاري التعرف على الخادم...', 'info');
-    probeServerAndShow(ip, statusId, function (ok) {
+    toast('جاري التحقق من السيرفر...', 'info');
+    checkLanServer(ip, function (ok) {
       if (!ok) {
-        toast(mode === 'lan'
-          ? '✗ مش واصل — تأكد إن القائد فاتح python lan_host.py وإنكم على نفس الشبكة / Radmin'
-          : '✗ مش واصل — تأكد من الرابط وإن القائد فاتح Python + tunnel', 'error');
+        toast('مش واصل للسيرفر على ' + ip + ' — تأكد إن القائد فاتح Python', 'error');
         return;
       }
-      toast('✓ تم التعرف على وجود الخادم', 'success');
       setupLanLobby(false, code, ip);
     });
   };
@@ -5627,7 +4603,6 @@
     var cd = document.getElementById('set-cam-dist');
     var ch = document.getElementById('set-cam-h');
     var cs = document.getElementById('set-cam-side');
-    var gfx = document.getElementById('set-graphics');
 
     function targetPlayer() {
       return players[state.pauseOwner != null ? state.pauseOwner : 0];
@@ -5645,10 +4620,6 @@
     if (cd) cd.oninput = function () { targetPlayer().settings.camDist = parseFloat(cd.value); };
     if (ch) ch.oninput = function () { targetPlayer().settings.camHeight = parseFloat(ch.value); };
     if (cs) cs.oninput = function () { targetPlayer().settings.camSide = parseFloat(cs.value); };
-    if (gfx) gfx.onchange = function () {
-      applyGraphicsQuality(parseInt(gfx.value, 10) || 3);
-      toast('تم تطبيق مستوى الجرافيكس ' + gfx.value, 'success');
-    };
 
     var kb = document.getElementById('kb-controls');
     if (kb) kb.innerHTML = 'W/A/S/D حركة<br>Space قفز<br>F جري<br>Ctrl إخفاء الماوس<br>Esc قائمة';
@@ -5757,11 +4728,6 @@
 
     // Update hideAllScreens list if needed - name entry is separate
     showNameEntry(false);
-    // restore graphics preference
-    try {
-      var g = parseInt(localStorage.getItem('sm_graphics') || '3', 10);
-      applyGraphicsQuality(g);
-    } catch (e) { applyGraphicsQuality(3); }
     animate();
   }
   function init() { loadingText.textContent = 'جاهز'; setTimeout(finishLoading, 100); }
