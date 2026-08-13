@@ -88,9 +88,9 @@
     <div class="menu-container">
       <h2 style="margin-bottom:12px">أونلاين</h2>
       <p style="text-align:center;color:#94a3b8;margin-bottom:10px;font-size:0.9rem;line-height:1.6">
-        اختر إنشاء لوبي أو انضمام. بعدين هتختار <strong style="color:#30d158">LAN</strong> (نفس الشبكة — بدون نت) أو <strong style="color:#fbbf24">كلاودفير</strong> (إنترنت).
+        اختر إنشاء لوبي أو انضمام. بعدين هتختار <strong style="color:#30d158">LAN / Radmin</strong> (أعلى أداء — بدون نت) أو <strong style="color:#fbbf24">كلاودفير</strong> (إنترنت).
       </p>
-      <p id="hub-server-status" style="text-align:center;color:#64748b;font-weight:600;margin-bottom:18px;font-size:0.85rem">القائد لازم يشغّل: python lan_host.py</p>
+      <p id="hub-server-status" style="text-align:center;color:#64748b;font-weight:600;margin-bottom:18px;font-size:0.85rem">القائد: شغّل python lan_host.py — مع Radmin استخدم IP الشبكة الافتراضية</p>
       <div class="menu-buttons">
         <button class="btn btn-primary" id="btn-online-create">إنشاء لوبي</button>
         <button class="btn btn-accent" id="btn-online-join">انضمام للوبي</button>
@@ -111,20 +111,22 @@
       <p id="create-pack-status" style="color:#94a3b8;font-size:0.8rem;min-height:1.2em"></p>
 
       <div style="margin-top:16px;border-top:1px solid #1e293b;padding-top:14px">
-        <p style="color:#fbbf24;margin-bottom:10px;font-size:0.9rem;font-weight:700">③ بعد التأكيد اختار نوع الاتصال</p>
-        <p style="color:#64748b;font-size:0.8rem;margin-bottom:12px;line-height:1.5">LAN = نفس الواي فاي/كابل بدون نت (بنج منخفض جداً). كلاودفير = من أي مكان على الإنترنت (بنج أعلى).</p>
+        <p style="color:#fbbf24;margin-bottom:10px;font-size:0.9rem;font-weight:700">③ اختار نوع الاتصال (مهم)</p>
+        <p style="color:#64748b;font-size:0.8rem;margin-bottom:12px;line-height:1.5"><strong style="color:#30d158">LAN / Radmin</strong> = أعلى إرسال وبنج أقل (نفس الواي فاي أو شبكة Radmin). <strong style="color:#fbbf24">كلاودفير</strong> = من أي مكان على الإنترنت.</p>
         <div style="display:flex;gap:10px;flex-wrap:wrap;margin-bottom:12px">
-          <button type="button" class="btn btn-success" id="btn-create-mode-lan" style="flex:1;min-width:140px">🏠 LAN (نفس الشبكة)</button>
+          <button type="button" class="btn btn-success" id="btn-create-mode-lan" style="flex:1;min-width:140px">🏠 LAN / Radmin</button>
           <button type="button" class="btn btn-accent" id="btn-create-mode-cloud" style="flex:1;min-width:140px">☁️ كلاودفير (إنترنت)</button>
         </div>
         <div id="create-lan-panel" class="hidden" style="margin-bottom:10px">
-          <p style="color:#30d158;font-size:0.85rem;margin-bottom:8px">شغّل على جهازك: <code style="color:#67e8f9">python lan_host.py</code> — صاحبك يحط IP جهازك المحلي (مثل 192.168.1.10). مفيش نت مطلوب.</p>
-          <input type="text" id="create-ip-input" class="room-input" placeholder="IP المحلي أو اترك 127.0.0.1 لنفس الجهاز" value="127.0.0.1" />
-          <p id="create-lan-hint" style="color:#64748b;font-size:0.75rem;margin-top:6px"></p>
+          <p style="color:#30d158;font-size:0.85rem;margin-bottom:8px">شغّل: <code style="color:#67e8f9">python lan_host.py</code> — مع Radmin حط IP شبكة Radmin (مثل 26.x.x.x). بدون نت.</p>
+          <input type="text" id="create-ip-input" class="room-input" placeholder="IP المحلي أو Radmin أو 127.0.0.1" value="127.0.0.1" />
+          <p id="create-ip-status" style="font-size:0.8rem;margin-top:6px;font-weight:700;min-height:1.3em;color:#94a3b8"></p>
+          <p id="create-lan-hint" style="color:#64748b;font-size:0.75rem;margin-top:4px"></p>
         </div>
         <div id="create-cloud-panel" class="hidden" style="margin-bottom:10px">
           <p style="color:#fbbf24;font-size:0.85rem;margin-bottom:8px">شغّل: <code style="color:#67e8f9">python lan_host.py</code> ثم <code style="color:#67e8f9">cloudflared tunnel --url http://localhost:27100</code> والصق الرابط هنا.</p>
           <input type="text" id="create-cloud-input" class="room-input" placeholder="https://xxxx.trycloudflare.com" value="" />
+          <p id="create-cloud-status" style="font-size:0.8rem;margin-top:6px;font-weight:700;min-height:1.3em;color:#94a3b8"></p>
         </div>
       </div>
 
@@ -142,16 +144,18 @@
 
       <p style="color:#fbbf24;margin-bottom:10px;font-size:0.9rem;font-weight:700">① نوع الاتصال</p>
       <div style="display:flex;gap:10px;flex-wrap:wrap;margin-bottom:12px">
-        <button type="button" class="btn btn-success" id="btn-join-mode-lan" style="flex:1;min-width:140px">🏠 LAN (نفس الشبكة)</button>
+        <button type="button" class="btn btn-success" id="btn-join-mode-lan" style="flex:1;min-width:140px">🏠 LAN / Radmin</button>
         <button type="button" class="btn btn-accent" id="btn-join-mode-cloud" style="flex:1;min-width:140px">☁️ كلاودفير (إنترنت)</button>
       </div>
       <div id="join-lan-panel" class="hidden" style="margin-bottom:10px">
-        <p style="color:#30d158;font-size:0.85rem;margin-bottom:8px">حط IP جهاز القائد على الشبكة المحلية (مثل 192.168.1.10) — بدون نت.</p>
-        <input type="text" id="join-ip-input" class="room-input" placeholder="192.168.1.10" value="" />
+        <p style="color:#30d158;font-size:0.85rem;margin-bottom:8px">حط IP جهاز القائد (محلي أو Radmin مثل 26.x.x.x) — بدون نت.</p>
+        <input type="text" id="join-ip-input" class="room-input" placeholder="192.168.1.10 أو IP Radmin" value="" />
+        <p id="join-ip-status" style="font-size:0.8rem;margin-top:6px;font-weight:700;min-height:1.3em;color:#94a3b8"></p>
       </div>
       <div id="join-cloud-panel" class="hidden" style="margin-bottom:10px">
         <p style="color:#fbbf24;font-size:0.85rem;margin-bottom:8px">الصق رابط trycloudflare بتاع القائد.</p>
         <input type="text" id="join-cloud-input" class="room-input" placeholder="https://xxxx.trycloudflare.com" value="" />
+        <p id="join-cloud-status" style="font-size:0.8rem;margin-top:6px;font-weight:700;min-height:1.3em;color:#94a3b8"></p>
       </div>
 
       <p style="color:#a78bfa;margin:14px 0 8px;font-size:0.85rem">② ارفع نفس ملف البيانات الشامل (زي القائد)</p>

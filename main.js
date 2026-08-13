@@ -3688,17 +3688,16 @@
       if (state.playType === 'online') {
         updateRemoteMeshes(delta);
         state.netPoseTimer = (state.netPoseTimer || 0) + rawDelta;
-        // Steady pose rate — don't over-flood HTTP (was causing freeze after ~10s)
-        // Host يرسل بثبات؛ المنضم عالي البنح يقلل إرساله
-        var ping = state.netPing || 80;
+        // Max send rate on LAN/Radmin (low ping); throttle only when ping is high
+        var ping = state.netPing || 40;
         var poseInterval;
         if (!state.useLan) poseInterval = 0.033;
         else if (state.isHost) {
-          poseInterval = (ping > 600) ? 0.07 : 0.04;
-        } else if (ping > 900) poseInterval = 0.18;
-        else if (ping > 500) poseInterval = 0.12;
-        else if (ping > 250) poseInterval = 0.07;
-        else poseInterval = 0.048;
+          poseInterval = (ping > 600) ? 0.06 : ((ping > 200) ? 0.035 : 0.022); // ~45Hz host on good LAN
+        } else if (ping > 900) poseInterval = 0.16;
+        else if (ping > 500) poseInterval = 0.10;
+        else if (ping > 200) poseInterval = 0.055;
+        else poseInterval = 0.028; // ~35Hz joiner on LAN/Radmin
         if (state.netPoseTimer >= poseInterval) {
           state.netPoseTimer = 0;
           sendMyPose();
@@ -3853,16 +3852,17 @@
 
   function lanSend(data) {
     if (!state.useLan || !state.roomCode) return;
-    // Limit in-flight sends so the browser doesn't queue hundreds of hung requests
+    // Higher in-flight budget on LAN/Radmin (low ping) for max send rate
     state._lanSendInflight = state._lanSendInflight || 0;
-    var maxInflight = (state.netPing > 800) ? 2 : ((state.netPing > 400) ? 3 : 5);
+    var maxInflight = (state.netPing > 800) ? 2 : ((state.netPing > 400) ? 4 : ((state.netPing > 120) ? 6 : 10));
     if (state._lanSendInflight > maxInflight) return;
     state._lanSendInflight++;
     fetch(lanBaseUrl() + '/send', {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({ room: state.roomCode, data: data }),
-      cache: 'no-store'
+      cache: 'no-store',
+      keepalive: true
     }).then(function () {
       state._lanSendInflight = Math.max(0, state._lanSendInflight - 1);
     }).catch(function () {
@@ -3987,14 +3987,15 @@
       }
 
       if (state._lanPollActive) {
-        // Adaptive poll: high ping → poll slower to avoid stacking requests
-        var ping = state.netPing || 80;
+        // Max performance on LAN/Radmin (low ping): poll as fast as safe
+        var ping = state.netPing || 40;
         var delay;
         if (ping > 600) delay = 80;
-        else if (ping > 300) delay = 50;
-        else if (state.isHost) delay = 25;
-        else delay = 32;
-        if (state.mode !== 'play') delay = Math.max(delay, 50);
+        else if (ping > 300) delay = 45;
+        else if (ping > 120) delay = 28;
+        else if (state.isHost) delay = 16;  // ~60Hz host on LAN
+        else delay = 20;                   // ~50Hz joiner on LAN
+        if (state.mode !== 'play') delay = Math.max(delay, 40);
         if (typeof document !== 'undefined' && document.hidden) delay = Math.max(delay, 100);
         state.lanPollTimer = setTimeout(lanPollOnce, delay);
       }
@@ -4660,8 +4661,11 @@
       if (done) return;
       done = true;
       cb(false, null);
-    }, 4000);
-    fetch(url, { cache: 'no-cache' }).then(function (r) { return r.json(); }).then(function (j) {
+    }, 3500);
+    fetch(url, { cache: 'no-store', mode: 'cors' }).then(function (r) {
+      if (!r.ok) throw new Error('bad status');
+      return r.json();
+    }).then(function (j) {
       if (done) return;
       done = true;
       clearTimeout(t);
@@ -4671,6 +4675,56 @@
       done = true;
       clearTimeout(t);
       cb(false, null);
+    });
+  }
+
+  // Live IP/host detection with clear Arabic messages
+  function setIpStatusEl(el, kind, text) {
+    if (!el) return;
+    el.textContent = text || '';
+    if (kind === 'ok') el.style.color = '#30d158';
+    else if (kind === 'err') el.style.color = '#ff6b8a';
+    else if (kind === 'wait') el.style.color = '#94a3b8';
+    else el.style.color = '#94a3b8';
+  }
+
+  function probeServerAndShow(ip, statusElId, onResult) {
+    var el = document.getElementById(statusElId);
+    var addr = (ip || '').trim();
+    if (!addr) {
+      setIpStatusEl(el, 'err', 'اكتب العنوان أولاً');
+      if (onResult) onResult(false, null);
+      return;
+    }
+    setIpStatusEl(el, 'wait', 'جاري التعرف على الخادم...');
+    checkLanServer(addr, function (ok, info) {
+      if (ok) {
+        setIpStatusEl(el, 'ok', '✓ تم التعرف على وجود الخادم');
+        if (info && info.ips && info.ips.length) state._detectedLanIps = info.ips;
+        state._lastCheckedLanIp = addr;
+      } else {
+        setIpStatusEl(el, 'err', '✗ مش واصل — تأكد إن python lan_host.py شغال والعنوان صح (Radmin / LAN)');
+      }
+      if (onResult) onResult(ok, info);
+    });
+  }
+
+  function wireIpLiveCheck(inputId, statusId) {
+    var inp = document.getElementById(inputId);
+    if (!inp) return;
+    var timer = null;
+    function schedule() {
+      if (timer) clearTimeout(timer);
+      timer = setTimeout(function () {
+        var v = (inp.value || '').trim();
+        if (v.length >= 3) probeServerAndShow(v, statusId);
+        else setIpStatusEl(document.getElementById(statusId), 'wait', '');
+      }, 550);
+    }
+    inp.addEventListener('input', schedule);
+    inp.addEventListener('blur', function () {
+      var v = (inp.value || '').trim();
+      if (v) probeServerAndShow(v, statusId);
     });
   }
 
@@ -4749,28 +4803,46 @@
     var btnLan = document.getElementById('btn-create-mode-lan');
     var btnCloud = document.getElementById('btn-create-mode-cloud');
     var doBtn = document.getElementById('btn-do-create');
-    if (lanP) lanP.classList.toggle('hidden', mode !== 'lan');
-    if (cloudP) cloudP.classList.toggle('hidden', mode !== 'cloud');
+    // Always show exactly one panel when a mode is chosen
+    if (lanP) {
+      if (mode === 'lan') lanP.classList.remove('hidden');
+      else lanP.classList.add('hidden');
+    }
+    if (cloudP) {
+      if (mode === 'cloud') cloudP.classList.remove('hidden');
+      else cloudP.classList.add('hidden');
+    }
     if (btnLan) {
-      btnLan.classList.toggle('btn-success', mode === 'lan');
-      btnLan.classList.toggle('btn-ghost', mode !== 'lan');
+      btnLan.className = mode === 'lan' ? 'btn btn-success' : 'btn btn-ghost';
+      btnLan.style.flex = '1';
+      btnLan.style.minWidth = '140px';
     }
     if (btnCloud) {
-      btnCloud.classList.toggle('btn-accent', mode === 'cloud');
-      btnCloud.classList.toggle('btn-ghost', mode !== 'cloud');
+      btnCloud.className = mode === 'cloud' ? 'btn btn-accent' : 'btn btn-ghost';
+      btnCloud.style.flex = '1';
+      btnCloud.style.minWidth = '140px';
     }
     if (doBtn) {
-      doBtn.disabled = false;
-      doBtn.textContent = mode === 'lan' ? 'تأكيد وإنشاء (LAN)' : 'تأكيد وإنشاء (كلاودفير)';
+      if (!mode) {
+        doBtn.disabled = true;
+        doBtn.textContent = 'اختر LAN أو كلاودفير أولاً';
+      } else {
+        doBtn.disabled = false;
+        doBtn.textContent = mode === 'lan' ? 'تأكيد وإنشاء (LAN / Radmin)' : 'تأكيد وإنشاء (كلاودفير)';
+      }
     }
     if (mode === 'lan') {
       var ipEl = document.getElementById('create-ip-input');
       if (ipEl && (!ipEl.value || ipEl.value === '')) ipEl.value = '127.0.0.1';
-      // try detect local IP hint from previous check
       var hint = document.getElementById('create-lan-hint');
       if (hint && state._detectedLanIps && state._detectedLanIps.length) {
-        hint.textContent = 'IP جهازك المحتمل: ' + state._detectedLanIps.join(' · ') + ' — أعطِه لصحابك على نفس الشبكة';
+        hint.textContent = 'IP جهازك المحتمل: ' + state._detectedLanIps.join(' · ') + ' — أعطِه لصحابك (LAN أو Radmin)';
       }
+      // auto-probe current value
+      if (ipEl && ipEl.value) probeServerAndShow(ipEl.value, 'create-ip-status');
+    } else if (mode === 'cloud') {
+      var cEl = document.getElementById('create-cloud-input');
+      if (cEl && cEl.value) probeServerAndShow(cEl.value, 'create-cloud-status');
     }
   }
 
@@ -4780,15 +4852,30 @@
     var cloudP = document.getElementById('join-cloud-panel');
     var btnLan = document.getElementById('btn-join-mode-lan');
     var btnCloud = document.getElementById('btn-join-mode-cloud');
-    if (lanP) lanP.classList.toggle('hidden', mode !== 'lan');
-    if (cloudP) cloudP.classList.toggle('hidden', mode !== 'cloud');
+    if (lanP) {
+      if (mode === 'lan') lanP.classList.remove('hidden');
+      else lanP.classList.add('hidden');
+    }
+    if (cloudP) {
+      if (mode === 'cloud') cloudP.classList.remove('hidden');
+      else cloudP.classList.add('hidden');
+    }
     if (btnLan) {
-      btnLan.classList.toggle('btn-success', mode === 'lan');
-      btnLan.classList.toggle('btn-ghost', mode !== 'lan');
+      btnLan.className = mode === 'lan' ? 'btn btn-success' : 'btn btn-ghost';
+      btnLan.style.flex = '1';
+      btnLan.style.minWidth = '140px';
     }
     if (btnCloud) {
-      btnCloud.classList.toggle('btn-accent', mode === 'cloud');
-      btnCloud.classList.toggle('btn-ghost', mode !== 'cloud');
+      btnCloud.className = mode === 'cloud' ? 'btn btn-accent' : 'btn btn-ghost';
+      btnCloud.style.flex = '1';
+      btnCloud.style.minWidth = '140px';
+    }
+    if (mode === 'lan') {
+      var ji = document.getElementById('join-ip-input');
+      if (ji && ji.value) probeServerAndShow(ji.value, 'join-ip-status');
+    } else if (mode === 'cloud') {
+      var jc = document.getElementById('join-cloud-input');
+      if (jc && jc.value) probeServerAndShow(jc.value, 'join-cloud-status');
     }
   }
 
@@ -4821,6 +4908,12 @@
   if (btnJoinModeLan) btnJoinModeLan.onclick = function () { setJoinNetMode('lan'); };
   var btnJoinModeCloud = document.getElementById('btn-join-mode-cloud');
   if (btnJoinModeCloud) btnJoinModeCloud.onclick = function () { setJoinNetMode('cloud'); };
+
+  // Live server detection under IP fields
+  wireIpLiveCheck('create-ip-input', 'create-ip-status');
+  wireIpLiveCheck('create-cloud-input', 'create-cloud-status');
+  wireIpLiveCheck('join-ip-input', 'join-ip-status');
+  wireIpLiveCheck('join-cloud-input', 'join-cloud-status');
 
   var btnOnlineCreate = document.getElementById('btn-online-create');
   if (btnOnlineCreate) btnOnlineCreate.onclick = function () {
@@ -5099,33 +5192,33 @@
   if (btnDoCreate) btnDoCreate.onclick = function () {
     var code = (document.getElementById('create-code-input').value || '').trim().toLowerCase().replace(/\s+/g, '');
     var mode = state._createNetMode;
-    if (!mode) { toast('اختر LAN أو كلاودفير أولاً', 'error'); return; }
+    if (!mode) { toast('اختر LAN / Radmin أو كلاودفير أولاً', 'error'); return; }
     var ip = '';
+    var statusId = mode === 'lan' ? 'create-ip-status' : 'create-cloud-status';
     if (mode === 'lan') {
       ip = (document.getElementById('create-ip-input') && document.getElementById('create-ip-input').value || '127.0.0.1').trim();
     } else {
       ip = (document.getElementById('create-cloud-input') && document.getElementById('create-cloud-input').value || '').trim();
     }
     if (!code || code.length < 2) { toast('اكتب رمز صالح', 'error'); return; }
-    if (!ip) { toast(mode === 'lan' ? 'اكتب IP المحلي' : 'الصق رابط الكلاودفير', 'error'); return; }
+    if (!ip) { toast(mode === 'lan' ? 'اكتب IP المحلي أو Radmin' : 'الصق رابط الكلاودفير', 'error'); return; }
     if (!createZipReady) {
       toast('ارفع الملف الشامل أولاً', 'error');
       if (createUploadInput) createUploadInput.click();
       return;
     }
-    toast(mode === 'lan' ? 'جاري التحقق من سيرفر LAN...' : 'جاري التحقق من الكلاودفير...', 'info');
-    checkLanServer(ip, function (ok, info) {
+    toast(mode === 'lan' ? 'جاري التعرف على الخادم (LAN/Radmin)...' : 'جاري التعرف على الخادم (كلاودفير)...', 'info');
+    probeServerAndShow(ip, statusId, function (ok, info) {
       if (!ok) {
-        if (mode === 'lan') {
-          toast('السيرفر مش شغال على LAN — شغّل: python lan_host.py على جهازك', 'error');
-        } else {
-          toast('السيرفر مش واصل — تأكد من python lan_host.py + cloudflared tunnel', 'error');
-        }
+        toast(mode === 'lan'
+          ? '✗ مش واصل — شغّل python lan_host.py وتأكد من IP (Radmin أو LAN)'
+          : '✗ مش واصل — تأكد من python lan_host.py + cloudflared tunnel', 'error');
         return;
       }
+      toast('✓ تم التعرف على وجود الخادم', 'success');
       if (info && info.ips) state._detectedLanIps = info.ips;
       setupLanLobby(true, code, ip);
-      toast(mode === 'lan' ? 'لوبي LAN جاهز — أعطِ أصحابك IP جهازك والرمز' : 'لوبي كلاودفير جاهز — أعطِ الرابط والرمز', 'success');
+      toast(mode === 'lan' ? 'لوبي LAN/Radmin جاهز — أعطِ أصحابك الـ IP والرمز' : 'لوبي كلاودفير جاهز — أعطِ الرابط والرمز', 'success');
     });
   };
 
@@ -5207,25 +5300,25 @@
   if (btnDoJoin) btnDoJoin.onclick = function () {
     var code = (document.getElementById('join-code-input').value || '').trim().toLowerCase().replace(/\s+/g, '');
     var mode = state._joinNetMode;
-    if (!mode) { toast('اختر LAN أو كلاودفير أولاً', 'error'); return; }
+    if (!mode) { toast('اختر LAN / Radmin أو كلاودفير أولاً', 'error'); return; }
     var ip = getJoinServerAddress();
+    var statusId = mode === 'lan' ? 'join-ip-status' : 'join-cloud-status';
     if (!code || code.length < 2) { toast('اكتب رمز الروم أو اختر من القائمة', 'error'); return; }
-    if (!ip) { toast(mode === 'lan' ? 'اكتب IP جهاز القائد على الشبكة' : 'الصق رابط الكلاودفير', 'error'); return; }
+    if (!ip) { toast(mode === 'lan' ? 'اكتب IP جهاز القائد (LAN أو Radmin)' : 'الصق رابط الكلاودفير', 'error'); return; }
     if (!joinZipReady) {
       toast('ارفع الملف الشامل أولاً', 'error');
       if (joinUploadInput) joinUploadInput.click();
       return;
     }
-    toast(mode === 'lan' ? 'جاري الاتصال بـ LAN...' : 'جاري الاتصال بالكلاودفير...', 'info');
-    checkLanServer(ip, function (ok) {
+    toast(mode === 'lan' ? 'جاري التعرف على الخادم (LAN/Radmin)...' : 'جاري التعرف على الخادم...', 'info');
+    probeServerAndShow(ip, statusId, function (ok) {
       if (!ok) {
-        if (mode === 'lan') {
-          toast('مش واصل على LAN — تأكد إن القائد فاتح python lan_host.py وإنكم على نفس الشبكة', 'error');
-        } else {
-          toast('مش واصل — تأكد من رابط الكلاودفير وإن القائد فاتح Python + tunnel', 'error');
-        }
+        toast(mode === 'lan'
+          ? '✗ مش واصل — تأكد إن القائد فاتح python lan_host.py وإنكم على نفس الشبكة / Radmin'
+          : '✗ مش واصل — تأكد من الرابط وإن القائد فاتح Python + tunnel', 'error');
         return;
       }
+      toast('✓ تم التعرف على وجود الخادم', 'success');
       setupLanLobby(false, code, ip);
     });
   };
