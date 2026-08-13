@@ -19,8 +19,10 @@ ROOMS = {}
 LOCK = threading.Lock()
 MAX_MSG = 150
 MAX_POSE_PLAYERS = 16
-HOST_TIMEOUT = 12.0   # seconds without host heartbeat → room gone
+HOST_TIMEOUT = 45.0   # seconds without host heartbeat → room gone (was 12; too aggressive on LAN)
 ROOM_TTL = 30 * 60
+# Grace: after room creation, don't delete for this long even if beat is late
+ROOM_GRACE = 8.0
 
 
 def local_ips():
@@ -50,6 +52,7 @@ def local_ips():
 
 def ensure_room(room):
     if room not in ROOMS:
+        now = time.time()
         ROOMS[room] = {
             'seq': 0,
             'messages': [],
@@ -59,9 +62,9 @@ def ensure_room(room):
                 'host': '',
                 'host_id': '',
                 'players': 0,
-                'created': time.time(),
-                'updated': time.time(),
-                'host_beat': time.time(),
+                'created': now,
+                'updated': now,
+                'host_beat': now,
                 'playing': False,
                 'visible': True,
             }
@@ -69,13 +72,22 @@ def ensure_room(room):
     return ROOMS[room]
 
 
+def is_host_alive(meta, now=None):
+    now = now if now is not None else time.time()
+    beat = meta.get('host_beat', 0) or 0
+    created = meta.get('created', 0) or 0
+    # Fresh rooms get a grace window so joiners don't race the first heartbeat
+    if (now - created) < ROOM_GRACE:
+        return True
+    return (now - beat) <= HOST_TIMEOUT
+
+
 def cleanup_rooms():
     now = time.time()
     dead = []
     for k, r in list(ROOMS.items()):
         m = r['meta']
-        # Host heartbeat expired → remove room entirely
-        if now - m.get('host_beat', 0) > HOST_TIMEOUT:
+        if not is_host_alive(m, now):
             dead.append(k)
             continue
         if now - m.get('updated', 0) > ROOM_TTL:
@@ -137,8 +149,7 @@ class Handler(BaseHTTPRequestHandler):
                 out = []
                 for code, r in ROOMS.items():
                     m = r['meta']
-                    # Only list rooms whose host is alive (heartbeat)
-                    if now - m.get('host_beat', 0) > HOST_TIMEOUT:
+                    if not is_host_alive(m, now):
                         continue
                     if not m.get('visible', True):
                         continue
@@ -165,17 +176,25 @@ class Handler(BaseHTTPRequestHandler):
             except Exception:
                 since = 0
             with LOCK:
-                # If room was cleaned (host gone), tell client
+                # Room not created yet (joiner raced host) → not dead, just missing
                 if room not in ROOMS:
-                    self._json(200, {'ok': True, 'messages': [], 'poses': [], 'dead': True, 't': time.time()})
+                    self._json(200, {
+                        'ok': True,
+                        'messages': [],
+                        'poses': [],
+                        'missing': True,
+                        'dead': False,
+                        't': time.time()
+                    })
                     return
                 r = ROOMS[room]
-                # host gone mid-session?
-                if time.time() - r['meta'].get('host_beat', 0) > HOST_TIMEOUT:
+                now = time.time()
+                # host truly gone → only then mark dead
+                if not is_host_alive(r['meta'], now):
                     del ROOMS[room]
                     self._json(200, {'ok': True, 'messages': [], 'poses': [], 'dead': True, 't': time.time()})
                     return
-                r['meta']['updated'] = time.time()
+                r['meta']['updated'] = now
                 msgs = [m for m in r['messages'] if m['id'] > since]
                 poses = list(r['poses'].values())
             self._json(200, {
@@ -263,8 +282,14 @@ class Handler(BaseHTTPRequestHandler):
                             pid = str(data.get('id') or '')
                             if pid:
                                 r['poses'].pop(pid, None)
-                            # Host left → delete room immediately
-                            if data.get('isHost') or (pid and pid == r['meta'].get('host_id')) or (pid.startswith('host_')):
+                            # Host left → delete room only if this really is the host
+                            host_id = str(r['meta'].get('host_id') or '')
+                            is_host_leave = bool(data.get('isHost'))
+                            if not is_host_leave and pid and host_id and pid == host_id:
+                                is_host_leave = True
+                            if not is_host_leave and pid.startswith('host_') and (not host_id or pid == host_id):
+                                is_host_leave = True
+                            if is_host_leave:
                                 ROOMS.pop(room, None)
                                 self._json(200, {'ok': True, 'id': 0, 'closed': True, 't': time.time()})
                                 return

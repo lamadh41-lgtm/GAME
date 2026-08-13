@@ -3936,9 +3936,20 @@
       state.netPing = state.netPing ? (state.netPing * 0.7 + sample * 0.3) : sample;
       updatePingHud(state.netPing);
 
-      // Room closed (host left / timeout)
+      // Room closed only when server says dead (host heartbeat truly expired)
       if (j && j.dead) {
         if (!state.isHost) {
+          // Grace: ignore transient dead right after join (race with host register)
+          var joinedAt = state._lanJoinedAt || 0;
+          var age = Date.now() - joinedAt;
+          state._lanDeadStreak = (state._lanDeadStreak || 0) + 1;
+          if (age < 8000 && state._lanDeadStreak < 6) {
+            // keep polling — host may still be registering the room
+            if (state._lanPollActive) {
+              state.lanPollTimer = setTimeout(lanPollOnce, 400);
+            }
+            return;
+          }
           toast('القائد خرج — الروم اتقفل', 'error');
           stopLanPoll();
           clearRemoteMeshes && clearRemoteMeshes();
@@ -3950,6 +3961,28 @@
         }
         return;
       }
+
+      // Room not created yet — joiner raced host. Keep waiting, re-send join.
+      if (j && j.missing) {
+        state._lanMissingStreak = (state._lanMissingStreak || 0) + 1;
+        if (!state.isHost && state._lanMissingStreak % 4 === 1) {
+          try {
+            lanSend({
+              type: 'join',
+              clientId: state.myNetId,
+              name: state.playerName || 'لاعب',
+              custom: (typeof playerCustom !== 'undefined' ? playerCustom[0] : null)
+            });
+          } catch (e) {}
+        }
+        if (state._lanPollActive) {
+          state.lanPollTimer = setTimeout(lanPollOnce, 300);
+        }
+        return;
+      }
+
+      state._lanDeadStreak = 0;
+      state._lanMissingStreak = 0;
 
       if (j && j.messages && j.messages.length) {
         j.messages.forEach(function (m) {
@@ -3974,9 +4007,10 @@
         });
       }
 
-      // Host heartbeat keeps room visible in /rooms list
+      // Host heartbeat: every poll in lobby, every ~4 polls in play (keeps room alive)
       state._hostBeatTimer = (state._hostBeatTimer || 0) + 1;
-      if (state.isHost && state._hostBeatTimer % 8 === 0) {
+      var beatEvery = (state.mode === 'play') ? 4 : 1;
+      if (state.isHost && state._hostBeatTimer % beatEvery === 0) {
         lanSend({
           type: 'hostbeat',
           isHost: true,
@@ -5138,6 +5172,10 @@
       isHost: true,
       custom: (typeof playerCustom !== 'undefined' ? playerCustom[0] : null)
     }] : [];
+    state._lanJoinedAt = Date.now();
+    state._lanDeadStreak = 0;
+    state._lanMissingStreak = 0;
+    state._hostBeatTimer = 0;
     clearRemoteMeshes();
     stopLanPoll();
 
@@ -5159,10 +5197,37 @@
     configureCustomUIForMode();
     renderNetLobbyList();
     showScreen('lobby');
-    startLanPoll();
 
-    if (!isHost) {
-      setTimeout(function () {
+    if (isHost) {
+      // Register room FIRST, then start polling (prevents joiner race → false "room closed")
+      var registerHost = function () {
+        try {
+          fetch(lanBaseUrl() + '/roommeta', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({
+              room: code,
+              host: state.playerName || 'القائد',
+              host_id: state.myNetId,
+              players: 1,
+              playing: false,
+              visible: true
+            }),
+            cache: 'no-store'
+          }).catch(function () {});
+        } catch (e) {}
+        lanSend({ type: 'hostbeat', isHost: true, id: state.myNetId, name: state.playerName || 'القائد', players: 1 });
+      };
+      registerHost();
+      // Retry registration a few times so room is solid before friends join
+      setTimeout(registerHost, 250);
+      setTimeout(registerHost, 800);
+      setTimeout(registerHost, 1800);
+      startLanPoll();
+      toast('لوبي LAN/Radmin جاهز — أعطِ أصحابك الـ IP والرمز', 'success');
+    } else {
+      startLanPoll();
+      var sendJoin = function () {
         try { readCustomFromUI && readCustomFromUI(0); } catch (e) {}
         lanSend({
           type: 'join',
@@ -5170,21 +5235,14 @@
           name: state.playerName || 'لاعب',
           custom: (typeof playerCustom !== 'undefined' ? playerCustom[0] : null)
         });
-        toast('انضممت عبر السيرفر', 'success');
-        document.getElementById('gamepad-hint').textContent = 'متصل عبر LAN — بانتظار القائد';
-        document.getElementById('btn-start-game').disabled = true;
-        document.getElementById('btn-start-game').textContent = 'في انتظار القائد...';
-      }, 200);
-    } else {
-      toast('لوبي السيرفر جاهز — أونلاين عام أو LAN', 'success');
-      try {
-        fetch(lanBaseUrl() + '/roommeta', {
-          method: 'POST',
-          headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify({ room: code, host: state.playerName || 'القائد', host_id: state.myNetId, players: 1, playing: false, visible: true })
-        });
-      lanSend({ type: 'hostbeat', isHost: true, id: state.myNetId, name: state.playerName || 'القائد', players: 1 });
-      } catch (e) {}
+      };
+      setTimeout(sendJoin, 150);
+      setTimeout(sendJoin, 700);
+      setTimeout(sendJoin, 1600);
+      toast('جاري الانضمام عبر السيرفر...', 'info');
+      document.getElementById('gamepad-hint').textContent = 'متصل عبر LAN — بانتظار القائد';
+      document.getElementById('btn-start-game').disabled = true;
+      document.getElementById('btn-start-game').textContent = 'في انتظار القائد...';
     }
   }
 
