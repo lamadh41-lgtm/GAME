@@ -34,6 +34,11 @@
     camDist: 5.8,
     camHeight: 2.4,
     camSide: 0,
+    // Respawn placement (build mode)
+    respawnPlaceMode: null, // null | 'lan' | 'split'
+    respawnMarkers: [], // THREE.Group meshes currently in scene
+    // Player display name (local)
+    playerName: '',
     // Full script control layer (programming mode)
     script: {
       inputLocked: [false, false],
@@ -896,14 +901,126 @@
     return group;
   }
 
+  // ===== NAME TAGS (above heads) =====
+  function createNameTagSprite(displayName) {
+    var text = (displayName || 'لاعب').toString().slice(0, 16);
+    var canvas = document.createElement('canvas');
+    canvas.width = 256;
+    canvas.height = 64;
+    var ctx = canvas.getContext('2d');
+    // rounded background
+    ctx.clearRect(0, 0, 256, 64);
+    var padX = 12, padY = 10;
+    ctx.font = 'bold 28px Tahoma, Arial, sans-serif';
+    var tw = Math.min(ctx.measureText(text).width, 220);
+    var boxW = tw + padX * 2;
+    var boxH = 40;
+    var bx = (256 - boxW) / 2;
+    var by = (64 - boxH) / 2;
+    // shadow
+    ctx.fillStyle = 'rgba(0,0,0,0.45)';
+    roundRect(ctx, bx + 2, by + 3, boxW, boxH, 12);
+    ctx.fill();
+    // gradient-ish solid
+    var grd = ctx.createLinearGradient(bx, by, bx, by + boxH);
+    grd.addColorStop(0, 'rgba(12, 20, 40, 0.92)');
+    grd.addColorStop(1, 'rgba(8, 14, 28, 0.95)');
+    ctx.fillStyle = grd;
+    roundRect(ctx, bx, by, boxW, boxH, 12);
+    ctx.fill();
+    // border
+    ctx.strokeStyle = 'rgba(0, 212, 255, 0.75)';
+    ctx.lineWidth = 2;
+    roundRect(ctx, bx, by, boxW, boxH, 12);
+    ctx.stroke();
+    // text
+    ctx.fillStyle = '#e8f4ff';
+    ctx.textAlign = 'center';
+    ctx.textBaseline = 'middle';
+    ctx.shadowColor = 'rgba(0,212,255,0.5)';
+    ctx.shadowBlur = 6;
+    ctx.fillText(text, 128, 32);
+    ctx.shadowBlur = 0;
+
+    var tex = new THREE.CanvasTexture(canvas);
+    tex.needsUpdate = true;
+    var mat = new THREE.SpriteMaterial({
+      map: tex,
+      transparent: true,
+      depthTest: false,
+      depthWrite: false
+    });
+    var sprite = new THREE.Sprite(mat);
+    sprite.scale.set(1.6, 0.4, 1);
+    sprite.position.set(0, 2.55, 0);
+    sprite.userData.isNameTag = true;
+    sprite.renderOrder = 999;
+    return sprite;
+  }
+
+  function roundRect(ctx, x, y, w, h, r) {
+    ctx.beginPath();
+    ctx.moveTo(x + r, y);
+    ctx.arcTo(x + w, y, x + w, y + h, r);
+    ctx.arcTo(x + w, y + h, x, y + h, r);
+    ctx.arcTo(x, y + h, x, y, r);
+    ctx.arcTo(x, y, x + w, y, r);
+    ctx.closePath();
+  }
+
+  function attachNameTag(group, displayName, visible) {
+    if (!group) return null;
+    // remove old
+    if (group.userData.nameTag) {
+      group.remove(group.userData.nameTag);
+      if (group.userData.nameTag.material && group.userData.nameTag.material.map) {
+        group.userData.nameTag.material.map.dispose();
+      }
+      if (group.userData.nameTag.material) group.userData.nameTag.material.dispose();
+      group.userData.nameTag = null;
+    }
+    var sprite = createNameTagSprite(displayName);
+    sprite.visible = visible !== false;
+    group.add(sprite);
+    group.userData.nameTag = sprite;
+    group.userData.displayName = displayName || '';
+    return sprite;
+  }
+
+  function setNameTagVisible(group, visible) {
+    if (group && group.userData && group.userData.nameTag) {
+      group.userData.nameTag.visible = !!visible;
+    }
+  }
+
+  function getLevelRespawnPoints(kind) {
+    // kind: 'lan' | 'split' — spaced so players don't stack on each other
+    var defaults = kind === 'lan'
+      ? [{ x: -6, y: 0, z: 0 }, { x: -4, y: 0, z: 0 }, { x: -2, y: 0, z: 0 }, { x: 0, y: 0, z: 0 },
+         { x: 2, y: 0, z: 0 }, { x: 4, y: 0, z: 0 }, { x: 6, y: 0, z: 0 }, { x: 0, y: 0, z: 3 }]
+      : [{ x: -2.5, y: 0, z: 0 }, { x: 2.5, y: 0, z: 0 }];
+    if (!state.currentLevelId || !state.levels[state.currentLevelId]) return defaults;
+    var r = ensureLevelRespawns(state.levels[state.currentLevelId]);
+    var list = (kind === 'lan' ? r.lan : r.split) || [];
+    if (!list.length) return defaults;
+    return list;
+  }
+
   function setupPlayers() {
     players.forEach(function (p) { if (p.group) { scene.remove(p.group); p.group = null; } });
     var c0 = (typeof playerCustom !== 'undefined' && playerCustom[0]) ? playerCustom[0] : null;
     var c1 = (typeof playerCustom !== 'undefined' && playerCustom[1]) ? playerCustom[1] : null;
+    var spawns = getLevelRespawnPoints('split');
+    var s0 = spawns[0] || { x: -2, y: 0, z: 0 };
+    var s1 = spawns[1] || { x: 2, y: 0, z: 0 };
+    var n0 = state.playerName || 'اللاعب 1';
+    var n1 = 'اللاعب 2';
     players[0].group = createCharacterMesh(0x1e40af, 0xe0ac69, c0);
-    players[0].group.position.set(-2, 0, 0); players[0].yaw = 0; players[0].velocity.set(0, 0, 0); scene.add(players[0].group);
+    players[0].group.position.set(s0.x, 0, s0.z); players[0].yaw = 0; players[0].velocity.set(0, 0, 0); scene.add(players[0].group);
+    attachNameTag(players[0].group, n0, true);
     players[1].group = createCharacterMesh(0xb91c1c, 0xe0ac69, c1);
-    players[1].group.position.set(2, 0, 0); players[1].yaw = Math.PI; players[1].velocity.set(0, 0, 0); scene.add(players[1].group);
+    players[1].group.position.set(s1.x, 0, s1.z); players[1].yaw = Math.PI; players[1].velocity.set(0, 0, 0); scene.add(players[1].group);
+    attachNameTag(players[1].group, n1, true);
     var aspect = (window.innerWidth / 2) / window.innerHeight;
     players[0].camera = new THREE.PerspectiveCamera(70, aspect, 0.1, 400);
     players[1].camera = new THREE.PerspectiveCamera(70, aspect, 0.1, 400);
@@ -1006,22 +1123,18 @@
       if (b.isEmpty()) continue;
       if (pBox.intersectsBox(b)) return true;
     }
-    // other local player (split)
-    for (i = 0; i < players.length; i++) {
-      if (!players[i] || players[i] === player || !players[i].group) continue;
-      var ox = players[i].group.position.x, oz = players[i].group.position.z;
-      var dx = x - ox, dz = z - oz;
-      if (dx * dx + dz * dz < (r * 2) * (r * 2)) return true;
+    // other local player (split only — soft, so you don't freeze if spawned stacked)
+    if (state.playType === 'split') {
+      for (i = 0; i < players.length; i++) {
+        if (!players[i] || players[i] === player || !players[i].group) continue;
+        var ox = players[i].group.position.x, oz = players[i].group.position.z;
+        var dx = x - ox, dz = z - oz;
+        if (dx * dx + dz * dz < (r * 1.6) * (r * 1.6)) return true;
+      }
     }
-    // remote net players
-    var ids = Object.keys(state.remoteMeshes || {});
-    for (i = 0; i < ids.length; i++) {
-      var m = state.remoteMeshes[ids[i]];
-      if (!m) continue;
-      var rx = m.position.x, rz = m.position.z;
-      var rdx = x - rx, rdz = z - rz;
-      if (rdx * rdx + rdz * rdz < (r * 2) * (r * 2)) return true;
-    }
+    // IMPORTANT: do NOT solid-collide remote net players.
+    // In LAN/online everyone often starts near the same spawn → collision froze movement
+    // while jump still worked (Y is not blocked the same way).
     return false;
   }
 
@@ -1233,15 +1346,162 @@
   function clearBuildObjects() {
     state.buildObjects.forEach(function (o) { scene.remove(o); });
     state.buildObjects = [];
+    clearRespawnMarkers();
     var el = document.getElementById('object-count');
     if (el) el.textContent = '0 عنصر';
     if (typeof refreshHierarchy === 'function') refreshHierarchy();
+  }
+
+  // ===== RESPAWN MARKERS =====
+  function clearRespawnMarkers() {
+    (state.respawnMarkers || []).forEach(function (m) { scene.remove(m); });
+    state.respawnMarkers = [];
+  }
+
+  function makeRespawnMarker(kind, index, pos) {
+    var color = kind === 'lan' ? 0x30d158 : 0xff2d55;
+    var g = new THREE.Group();
+    var pole = new THREE.Mesh(
+      new THREE.CylinderGeometry(0.08, 0.08, 1.6, 8),
+      new THREE.MeshStandardMaterial({ color: color, emissive: color, emissiveIntensity: 0.35 })
+    );
+    pole.position.y = 0.8;
+    g.add(pole);
+    var flag = new THREE.Mesh(
+      new THREE.BoxGeometry(0.55, 0.35, 0.04),
+      new THREE.MeshStandardMaterial({ color: color, emissive: color, emissiveIntensity: 0.5 })
+    );
+    flag.position.set(0.3, 1.4, 0);
+    g.add(flag);
+    var base = new THREE.Mesh(
+      new THREE.CylinderGeometry(0.35, 0.4, 0.12, 12),
+      new THREE.MeshStandardMaterial({ color: 0x222222 })
+    );
+    base.position.y = 0.06;
+    g.add(base);
+    // number disc
+    var disc = new THREE.Mesh(
+      new THREE.CircleGeometry(0.22, 16),
+      new THREE.MeshBasicMaterial({ color: 0xffffff })
+    );
+    disc.position.set(0, 1.85, 0.02);
+    disc.rotation.x = -0.3;
+    g.add(disc);
+    g.position.set(pos.x, 0, pos.z);
+    g.userData.isRespawn = true;
+    g.userData.respawnKind = kind;
+    g.userData.respawnIndex = index;
+    return g;
+  }
+
+  function ensureLevelRespawns(level) {
+    if (!level.respawns) level.respawns = { lan: [], split: [] };
+    if (!level.respawns.lan) level.respawns.lan = [];
+    if (!level.respawns.split) level.respawns.split = [];
+    return level.respawns;
+  }
+
+  function loadRespawnMarkers(levelId) {
+    clearRespawnMarkers();
+    var level = state.levels[levelId];
+    if (!level) return;
+    var r = ensureLevelRespawns(level);
+    (r.lan || []).forEach(function (p, i) {
+      var m = makeRespawnMarker('lan', i, p);
+      scene.add(m);
+      state.respawnMarkers.push(m);
+    });
+    (r.split || []).forEach(function (p, i) {
+      var m = makeRespawnMarker('split', i, p);
+      scene.add(m);
+      state.respawnMarkers.push(m);
+    });
+    updateRespawnHint();
+  }
+
+  function serializeRespawns() {
+    if (!state.currentLevelId || !state.levels[state.currentLevelId]) return { lan: [], split: [] };
+    return ensureLevelRespawns(state.levels[state.currentLevelId]);
+  }
+
+  function saveRespawnsFromMarkers() {
+    if (!state.currentLevelId || !state.levels[state.currentLevelId]) return;
+    var lan = [];
+    var split = [];
+    (state.respawnMarkers || []).forEach(function (m) {
+      var p = { x: m.position.x, y: 0, z: m.position.z };
+      if (m.userData.respawnKind === 'lan') lan.push(p);
+      else if (m.userData.respawnKind === 'split') split.push(p);
+    });
+    state.levels[state.currentLevelId].respawns = { lan: lan, split: split };
+  }
+
+  function updateRespawnHint() {
+    var el = document.getElementById('respawn-mode-hint');
+    if (!el) return;
+    var mode = state.respawnPlaceMode;
+    if (!mode) {
+      el.textContent = 'اختر الوضع ثم اضغط على الأرض لوضع النقاط';
+      return;
+    }
+    var r = state.currentLevelId && state.levels[state.currentLevelId]
+      ? ensureLevelRespawns(state.levels[state.currentLevelId])
+      : { lan: [], split: [] };
+    // count from markers for live accuracy
+    var lanCount = 0, splitCount = 0;
+    (state.respawnMarkers || []).forEach(function (m) {
+      if (m.userData.respawnKind === 'lan') lanCount++;
+      else if (m.userData.respawnKind === 'split') splitCount++;
+    });
+    if (mode === 'lan') {
+      el.textContent = 'وضع LAN (أخضر) — ' + lanCount + ' / 8 — اضغط على الأرض للوضع، أو على نقطة لحذفها';
+    } else {
+      el.textContent = 'وضع Split (أحمر) — ' + splitCount + ' / 2 — اضغط على الأرض للوضع، أو على نقطة لحذفها';
+    }
+  }
+
+  function placeRespawnAt(point) {
+    if (!state.respawnPlaceMode || !state.currentLevelId) {
+      toast('أنشئ لفل أولاً', 'error');
+      return;
+    }
+    var kind = state.respawnPlaceMode;
+    var max = kind === 'lan' ? 8 : 2;
+    var count = 0;
+    (state.respawnMarkers || []).forEach(function (m) {
+      if (m.userData.respawnKind === kind) count++;
+    });
+    if (count >= max) {
+      toast(kind === 'lan' ? 'وصلت لحد 8 أماكن LAN' : 'وصلت لحد مكانين Split', 'error');
+      return;
+    }
+    var m = makeRespawnMarker(kind, count, point);
+    scene.add(m);
+    state.respawnMarkers.push(m);
+    saveRespawnsFromMarkers();
+    updateRespawnHint();
+    toast('تم وضع ريسبون ' + (kind === 'lan' ? 'LAN' : 'Split') + ' (' + (count + 1) + '/' + max + ')', 'success');
+  }
+
+  function removeRespawnMarker(mesh) {
+    scene.remove(mesh);
+    state.respawnMarkers = state.respawnMarkers.filter(function (m) { return m !== mesh; });
+    // re-index
+    var lanI = 0, splitI = 0;
+    state.respawnMarkers.forEach(function (m) {
+      if (m.userData.respawnKind === 'lan') m.userData.respawnIndex = lanI++;
+      else m.userData.respawnIndex = splitI++;
+    });
+    saveRespawnsFromMarkers();
+    updateRespawnHint();
+    toast('تم حذف نقطة الريسبون', 'info');
   }
 
   function loadLevelIntoScene(levelId) {
     clearBuildObjects();
     var level = state.levels[levelId];
     if (!level) return;
+    ensureLevelRespawns(level);
     (level.objects || []).forEach(function (o) {
       var item = findCatalogItem(o.id);
       var mesh = (item && item.factory) ? item.factory() : makeSimpleBlock([1, 1, 1], 0x888);
@@ -1253,6 +1513,7 @@
       scene.add(mesh);
       state.buildObjects.push(mesh);
     });
+    loadRespawnMarkers(levelId);
     var el = document.getElementById('object-count');
     if (el) el.textContent = state.buildObjects.length + ' عنصر';
     if (typeof refreshHierarchy === 'function') refreshHierarchy();
@@ -1267,6 +1528,7 @@
   function saveCurrentLevel() {
     if (!state.currentLevelId) { toast('أنشئ لفل أولاً', 'error'); return; }
     state.levels[state.currentLevelId].objects = serializeObjects();
+    saveRespawnsFromMarkers();
     state.levels[state.currentLevelId].updatedAt = Date.now();
     renderLevelsList(); updateLobbyLevelSelect();
     toast('تم حفظ: ' + state.levels[state.currentLevelId].name, 'success');
@@ -1278,9 +1540,10 @@
       // SAVE current level objects before switching away
       if (state.currentLevelId && state.levels[state.currentLevelId]) {
         state.levels[state.currentLevelId].objects = serializeObjects();
+        saveRespawnsFromMarkers();
       }
       var id = generateLevelId();
-      state.levels[id] = { name: name, objects: [], scripts: [], sounds: [], createdAt: Date.now() };
+      state.levels[id] = { name: name, objects: [], scripts: [], sounds: [], respawns: { lan: [], split: [] }, createdAt: Date.now() };
       state.currentLevelId = id;
       clearBuildObjects();
       document.getElementById('current-level-label').textContent = name;
@@ -1293,6 +1556,7 @@
     // Always save current level state before switching (even if empty)
     if (state.currentLevelId && state.levels[state.currentLevelId]) {
       state.levels[state.currentLevelId].objects = serializeObjects();
+      saveRespawnsFromMarkers();
     }
     state.currentLevelId = id;
     loadLevelIntoScene(id);
@@ -1360,7 +1624,10 @@
   function downloadAllAsZip() {
     if (typeof JSZip === 'undefined') { toast('JSZip غير متوفر', 'error'); return; }
     // Auto-save current
-    if (state.currentLevelId) state.levels[state.currentLevelId].objects = serializeObjects();
+    if (state.currentLevelId) {
+      state.levels[state.currentLevelId].objects = serializeObjects();
+      saveRespawnsFromMarkers();
+    }
 
     var zip = new JSZip();
     var levelsFolder = zip.folder('levels');
@@ -1380,8 +1647,14 @@
       var soundsF = lf.folder('الاصوات');
       var scriptsF = lf.folder('البرمجيات');
 
-      // Build data
-      var buildData = JSON.stringify({ levelId: id, name: lv.name, objects: lv.objects || [] }, null, 2);
+      // Build data (includes respawn points)
+      var resp = ensureLevelRespawns(lv);
+      var buildData = JSON.stringify({
+        levelId: id,
+        name: lv.name,
+        objects: lv.objects || [],
+        respawns: { lan: resp.lan || [], split: resp.split || [] }
+      }, null, 2);
       buildF.file('build.json', buildData);
       globalBuild.file(folderName + '_build.json', buildData);
 
@@ -1436,7 +1709,7 @@
           if (parts[0] === 'levels' && parts.length >= 3) {
             var levelFolder = parts[1];
             if (!levelMap[levelFolder]) {
-              levelMap[levelFolder] = { name: levelFolder.replace(/_level_.*$/, '').replace(/_[a-z0-9]+$/, '') || levelFolder, objects: [], scripts: [], sounds: [] };
+              levelMap[levelFolder] = { name: levelFolder.replace(/_level_.*$/, '').replace(/_[a-z0-9]+$/, '') || levelFolder, objects: [], scripts: [], sounds: [], respawns: { lan: [], split: [] } };
             }
             var sub = parts[2];
             var fileName = parts.slice(3).join('/') || parts[parts.length - 1];
@@ -1449,6 +1722,7 @@
                     if (data.objects) levelMap[levelFolder].objects = data.objects;
                     if (data.name) levelMap[levelFolder].name = data.name;
                     if (data.levelId) levelMap[levelFolder].id = data.levelId;
+                    if (data.respawns) levelMap[levelFolder].respawns = data.respawns;
                   } catch (err) { console.warn(err); }
                 }));
               }
@@ -1483,6 +1757,7 @@
               objects: data.objects || (state.levels[id] && state.levels[id].objects) || [],
               scripts: data.scripts.length ? data.scripts : (state.levels[id] && state.levels[id].scripts) || [],
               sounds: data.sounds.length ? data.sounds : (state.levels[id] && state.levels[id].sounds) || [],
+              respawns: data.respawns || (state.levels[id] && state.levels[id].respawns) || { lan: [], split: [] },
               createdAt: Date.now()
             };
             count++;
@@ -1655,11 +1930,28 @@
   function onBuildClick(e) {
     if (state.mode !== 'build' || state.flyMode) return;
     // ignore clicks on UI
-    if (e.target.closest && (e.target.closest('#obj-toolbar') || e.target.closest('.hierarchy-panel') || e.target.closest('.build-toolbar') || e.target.closest('.build-sidebar-wrap') || e.target.closest('.level-panel'))) return;
+    if (e.target.closest && (e.target.closest('#obj-toolbar') || e.target.closest('.hierarchy-panel') || e.target.closest('.build-toolbar') || e.target.closest('.build-sidebar-wrap') || e.target.closest('.level-panel') || e.target.closest('#respawn-choice-panel'))) return;
 
     mouse.x = (e.clientX / window.innerWidth) * 2 - 1;
     mouse.y = -(e.clientY / window.innerHeight) * 2 + 1;
     raycaster.setFromCamera(mouse, buildCamera);
+
+    // ===== RESPAWN PLACEMENT MODE =====
+    if (state.respawnPlaceMode) {
+      // click existing respawn marker to remove
+      var hitsR = raycaster.intersectObjects(state.respawnMarkers, true);
+      if (hitsR.length) {
+        var rm = hitsR[0].object;
+        while (rm.parent && !rm.userData.isRespawn) rm = rm.parent;
+        if (rm.userData && rm.userData.isRespawn) {
+          removeRespawnMarker(rm);
+          return;
+        }
+      }
+      var hitsG = raycaster.intersectObject(ground);
+      if (hitsG.length) placeRespawnAt(hitsG[0].point);
+      return;
+    }
 
     // Move mode from hierarchy context
     if (typeof moveModeObj !== 'undefined' && moveModeObj) {
@@ -1697,6 +1989,16 @@
       var hits = raycaster.intersectObject(ground);
       if (hits.length) placeObject(hits[0].point);
     } else if (state.currentTool === 'delete') {
+      // also allow deleting respawn markers
+      var hitsR2 = raycaster.intersectObjects(state.respawnMarkers, true);
+      if (hitsR2.length) {
+        var rm2 = hitsR2[0].object;
+        while (rm2.parent && !rm2.userData.isRespawn) rm2 = rm2.parent;
+        if (rm2.userData && rm2.userData.isRespawn) {
+          removeRespawnMarker(rm2);
+          return;
+        }
+      }
       var hits2 = raycaster.intersectObjects(state.buildObjects, true);
       if (hits2.length) {
         var obj2 = hits2[0].object;
@@ -2183,18 +2485,24 @@
     } else if (name === 'lobby') {
       // Do NOT reset player2Joined here — callers set it intentionally
       lobbyScreen.classList.remove('hidden');
+      if (lobbyScreen) lobbyScreen.classList.remove('online-lobby');
       updateLobbyLevelSelect();
     } else if (name === 'build') {
       if (typeof stopAllScripts === 'function') stopAllScripts();
       players.forEach(function (p) {
         if (p.group) { scene.remove(p.group); p.group = null; }
       });
+      clearRemoteMeshes && clearRemoteMeshes();
       buildUI.classList.remove('hidden');
       gridHelper.visible = true;
       populateSidebar(); renderLevelsList(); updateAssetsInfo(); refreshHierarchy();
       state.flyPos.set(15, 18, 15); state.flyYaw = 0.8; state.flyPitch = 0.35;
       buildCamera.position.copy(state.flyPos);
       buildCamera.lookAt(0, 0, 0);
+      state.respawnPlaceMode = null;
+      var rp = document.getElementById('respawn-choice-panel');
+      if (rp) rp.classList.add('hidden');
+      if (state.currentLevelId) loadRespawnMarkers(state.currentLevelId);
     } else if (name === 'play') {
       gameUI.classList.remove('hidden');
       if (state.playType === 'split') {
@@ -2225,11 +2533,13 @@
         return;
       }
     }
-    // Apply customization
+    // Apply customization from UI
     try {
       if (typeof readCustomFromUI === 'function') {
-        var prev = document.getElementById('custom-player-select') ? document.getElementById('custom-player-select').value : '0';
-        if (document.getElementById('custom-player-select')) {
+        if (state.playType === 'online') {
+          readCustomFromUI(0);
+        } else if (document.getElementById('custom-player-select')) {
+          var prev = document.getElementById('custom-player-select').value;
           document.getElementById('custom-player-select').value = '0';
           readCustomFromUI(0);
           document.getElementById('custom-player-select').value = '1';
@@ -2243,11 +2553,23 @@
     var levelId = '';
     var sel = document.getElementById('lobby-level-select');
     if (sel) levelId = sel.value || '';
-    if (levelId) loadLevelIntoScene(levelId);
-    else clearBuildObjects();
+    // Save respawns from markers before loading into play (if still in build)
+    if (state.currentLevelId && state.levels[state.currentLevelId]) {
+      saveRespawnsFromMarkers();
+    }
+    if (levelId) {
+      state.currentLevelId = levelId;
+      loadLevelIntoScene(levelId);
+    } else clearBuildObjects();
+    // Hide respawn markers during play (build-only visuals)
+    clearRespawnMarkers();
+
+    if (lobbyScreen) lobbyScreen.classList.remove('online-lobby');
 
     if (state.playType === 'online') {
       setupPlayersForNet();
+      // force next pose to include clothes so remotes get appearance
+      state._lastSentCustomKey = null;
     } else {
       setupPlayers();
     }
@@ -2258,6 +2580,11 @@
       var startMsg = { type: 'start', levelId: levelId, levelName: levelName, roster: state.netRoster };
       if (state.useLan) lanSend(startMsg);
       else broadcastToAll(startMsg);
+    }
+    // send first poses quickly after start
+    if (state.playType === 'online') {
+      setTimeout(function () { try { sendMyPose(); } catch (e) {} }, 100);
+      setTimeout(function () { try { sendMyPose(); } catch (e) {} }, 400);
     }
     if (levelId) {
       setTimeout(function () { if (typeof runLevelScripts === 'function') runLevelScripts(levelId); }, 100);
@@ -2276,7 +2603,11 @@
         // save and go menu
         if (state.currentLevelId && state.levels[state.currentLevelId]) {
           state.levels[state.currentLevelId].objects = serializeObjects();
+          saveRespawnsFromMarkers();
         }
+        state.respawnPlaceMode = null;
+        var rpEsc = document.getElementById('respawn-choice-panel');
+        if (rpEsc) rpEsc.classList.add('hidden');
         showScreen('menu');
       } else if (state.mode === 'lobby') {
         showScreen('menu');
@@ -2710,11 +3041,19 @@
     ['custom-hat','custom-glasses','custom-shirt','custom-pants','custom-shoes','color-hat','color-glasses','color-shirt','color-pants','color-shoes'].forEach(function (id) {
       var el = document.getElementById(id);
       if (el) el.onchange = function () {
-        var idx = parseInt(document.getElementById('custom-player-select').value) || 0;
+        var idx = 0;
+        if (state.playType === 'split') {
+          idx = parseInt(document.getElementById('custom-player-select').value) || 0;
+        }
+        // Online: always only own clothes (slot 0)
         readCustomFromUI(idx);
-        // sync clothes to other players
         if (state.playType === 'online' && state.myNetId && typeof playerCustom !== 'undefined') {
-          var msg = { type: 'custom', id: state.myNetId, custom: playerCustom[idx] };
+          var msg = { type: 'custom', id: state.myNetId, custom: playerCustom[0], name: state.playerName };
+          if (state.netRoster) {
+            state.netRoster.forEach(function (r) {
+              if (r.id === state.myNetId) r.custom = playerCustom[0];
+            });
+          }
           if (state.useLan) lanSend(msg);
           else if (state.isHost) broadcastToAll(msg);
           else if (state.connection) try { state.connection.send(msg); } catch (e) {}
@@ -2722,6 +3061,31 @@
       };
     });
     applyCustomToUI(0);
+  }
+
+  function configureCustomUIForMode() {
+    var row = document.getElementById('custom-player-row');
+    var sel = document.getElementById('custom-player-select');
+    var hint = document.getElementById('custom-owner-hint');
+    if (state.playType === 'online') {
+      if (row) row.style.display = 'none';
+      if (sel) {
+        sel.innerHTML = '<option value="0">ملابسي</option>';
+        sel.value = '0';
+        sel.disabled = true;
+      }
+      if (hint) hint.textContent = 'تعدل ملابسك أنت فقط — مش تقدر تغيّر لبس حد تاني';
+      applyCustomToUI(0);
+    } else {
+      if (row) row.style.display = '';
+      if (sel) {
+        sel.disabled = false;
+        sel.innerHTML = '<option value="0">' + (state.playerName || 'اللاعب 1') + '</option><option value="1">اللاعب 2</option>';
+        sel.value = '0';
+      }
+      if (hint) hint.textContent = 'Split: اختر اللاعب عشان تعدّل ملابسه (نفس الجهاز)';
+      applyCustomToUI(0);
+    }
   }
 
 
@@ -2737,25 +3101,99 @@
   document.getElementById('btn-start-game').onclick = startGame;
   document.getElementById('btn-leave-lobby').onclick = function () {
     if (state.playType === 'online' && state.myNetId) {
-      if (state.useLan) lanSend({ type: 'leave', id: state.myNetId });
-      else broadcastToAll({ type: 'leave', id: state.myNetId });
+      var leaveMsg = { type: 'leave', id: state.myNetId, name: state.playerName || 'لاعب', isHost: !!state.isHost };
+      if (state.useLan) lanSend(leaveMsg);
+      else broadcastToAll(leaveMsg);
     }
     stopLanPoll();
     if (state.peer) try { state.peer.destroy(); } catch (e) {}
     state.peer = null; state.connection = null; state.connections = [];
     state.player2Joined = false; state.netRoster = []; state.myNetId = null;
     state.useLan = false;
+    state.remoteTargets = {};
     clearRemoteMeshes();
     showScreen('menu');
   };
+
+  // Notify others if tab closes mid-game
+  window.addEventListener('beforeunload', function () {
+    if (state.playType === 'online' && state.myNetId && state.useLan) {
+      try {
+        var payload = JSON.stringify({
+          room: state.roomCode,
+          data: { type: 'leave', id: state.myNetId, name: state.playerName || 'لاعب', isHost: !!state.isHost }
+        });
+        if (navigator.sendBeacon) {
+          navigator.sendBeacon(lanBaseUrl() + '/send', new Blob([payload], { type: 'application/json' }));
+        }
+      } catch (e) {}
+    }
+  });
   document.getElementById('btn-exit-build').onclick = function () {
     if (state.currentLevelId && state.levels[state.currentLevelId]) {
       state.levels[state.currentLevelId].objects = serializeObjects();
+      saveRespawnsFromMarkers();
     }
+    state.respawnPlaceMode = null;
+    var rp = document.getElementById('respawn-choice-panel');
+    if (rp) rp.classList.add('hidden');
     showScreen('menu');
   };
   document.getElementById('btn-download-data').onclick = downloadAllAsZip;
   document.getElementById('btn-save-level').onclick = saveCurrentLevel;
+
+  // ===== RESPAWN UI =====
+  var btnRespawnPlaces = document.getElementById('btn-respawn-places');
+  if (btnRespawnPlaces) {
+    btnRespawnPlaces.onclick = function () {
+      if (!state.currentLevelId) {
+        toast('أنشئ لفل أولاً', 'error');
+        return;
+      }
+      var panel = document.getElementById('respawn-choice-panel');
+      if (!panel) return;
+      panel.classList.toggle('hidden');
+      if (panel.classList.contains('hidden')) {
+        state.respawnPlaceMode = null;
+        updateRespawnHint();
+      }
+    };
+  }
+  var btnRespawnLan = document.getElementById('btn-respawn-lan');
+  if (btnRespawnLan) {
+    btnRespawnLan.onclick = function () {
+      state.respawnPlaceMode = 'lan';
+      state.selectedItem = null;
+      state.currentTool = 'select';
+      selectBuildObject(null);
+      if (ghostMesh) { scene.remove(ghostMesh); ghostMesh = null; }
+      updateRespawnHint();
+      toast('وضع LAN: اضغط على الأرض لوضع نقاط خضراء (حد أقصى 8)', 'info');
+    };
+  }
+  var btnRespawnSplit = document.getElementById('btn-respawn-split');
+  if (btnRespawnSplit) {
+    btnRespawnSplit.onclick = function () {
+      state.respawnPlaceMode = 'split';
+      state.selectedItem = null;
+      state.currentTool = 'select';
+      selectBuildObject(null);
+      if (ghostMesh) { scene.remove(ghostMesh); ghostMesh = null; }
+      updateRespawnHint();
+      toast('وضع Split: اضغط على الأرض لوضع نقاط حمراء (حد أقصى 2)', 'info');
+    };
+  }
+  var btnRespawnDone = document.getElementById('btn-respawn-done');
+  if (btnRespawnDone) {
+    btnRespawnDone.onclick = function () {
+      state.respawnPlaceMode = null;
+      saveRespawnsFromMarkers();
+      var panel = document.getElementById('respawn-choice-panel');
+      if (panel) panel.classList.add('hidden');
+      updateRespawnHint();
+      toast('تم حفظ أماكن الريسبون', 'success');
+    };
+  }
   document.getElementById('btn-new-level').onclick = createNewLevel;
   document.getElementById('btn-upload-all').onclick = function () { document.getElementById('upload-all-input').click(); };
   document.getElementById('upload-all-input').onchange = function (e) {
@@ -2828,11 +3266,13 @@
       if (state.paused && state.pauseOwner === 1) {
         handleGamepadMenuNav(gpInput, rawDelta);
       }
-      // Network pose sync (~30Hz) + smooth remote players
+      // Network pose sync — PeerJS ~30Hz, LAN HTTP ~20Hz (lighter on lan_host)
       if (state.playType === 'online') {
         updateRemoteMeshes(delta);
         state.netPoseTimer = (state.netPoseTimer || 0) + rawDelta;
-        if (state.netPoseTimer >= 0.033) {
+        // Steady pose rate — don't over-flood HTTP (was causing freeze after ~10s)
+        var poseInterval = state.useLan ? 0.04 : 0.033;
+        if (state.netPoseTimer >= poseInterval) {
           state.netPoseTimer = 0;
           sendMyPose();
         }
@@ -2870,8 +3310,14 @@
         updatePlayerCamera(players[0]);
         updatePlayerCamera(players[1]);
         var w = window.innerWidth, h = window.innerHeight, half = Math.floor(w / 2);
+        // P1 camera: hide own name, show P2
+        setNameTagVisible(players[0].group, false);
+        setNameTagVisible(players[1].group, true);
         renderer.setViewport(0, 0, half, h); renderer.setScissor(0, 0, half, h);
         renderer.render(scene, players[0].camera);
+        // P2 camera: hide own name, show P1
+        setNameTagVisible(players[0].group, true);
+        setNameTagVisible(players[1].group, false);
         renderer.setViewport(half, 0, w - half, h); renderer.setScissor(half, 0, w - half, h);
         renderer.render(scene, players[1].camera);
       }
@@ -2938,47 +3384,143 @@
 
   
   // ===== Pure LAN bus (no internet) via lan_host.py on host machine =====
+  function normalizeLanHost(raw) {
+    var s = (raw || '').trim();
+    if (!s) return 'http://127.0.0.1:27100';
+    // Full URL already
+    if (/^https?:\/\//i.test(s)) {
+      return s.replace(/\/$/, '');
+    }
+    // host:port
+    if (s.indexOf(':') !== -1 && s.indexOf('/') === -1) {
+      return 'http://' + s;
+    }
+    // bare domain/tunnel hostname (no port) — use as https if looks public, else http + default port
+    if (/^[a-z0-9.-]+\.[a-z]{2,}$/i.test(s) && !/^\d+\.\d+\.\d+\.\d+$/.test(s)) {
+      // trycloudflare / ngrok style hostnames
+      return 'https://' + s.replace(/\/$/, '');
+    }
+    // plain IP
+    return 'http://' + s + ':' + (state.lanPort || 27100);
+  }
+
   function lanBaseUrl() {
-    var ip = (state.lanIp || '127.0.0.1').trim();
-    return 'http://' + ip + ':' + (state.lanPort || 27100);
+    return normalizeLanHost(state.lanIp || '127.0.0.1');
   }
 
   function stopLanPoll() {
+    state._lanPollActive = false;
     if (state.lanPollTimer) {
-      clearInterval(state.lanPollTimer);
+      clearTimeout(state.lanPollTimer);
       state.lanPollTimer = null;
+    }
+    if (state._lanAbort) {
+      try { state._lanAbort.abort(); } catch (e) {}
+      state._lanAbort = null;
     }
   }
 
   function lanSend(data) {
     if (!state.useLan || !state.roomCode) return;
+    // Limit in-flight sends so the browser doesn't queue hundreds of hung requests
+    state._lanSendInflight = state._lanSendInflight || 0;
+    if (state._lanSendInflight > 6) return;
+    state._lanSendInflight++;
     fetch(lanBaseUrl() + '/send', {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ room: state.roomCode, data: data })
-    }).catch(function () {});
+      body: JSON.stringify({ room: state.roomCode, data: data }),
+      cache: 'no-store'
+    }).then(function () {
+      state._lanSendInflight = Math.max(0, state._lanSendInflight - 1);
+    }).catch(function () {
+      state._lanSendInflight = Math.max(0, state._lanSendInflight - 1);
+    });
   }
 
   function lanPollOnce() {
-    if (!state.useLan || !state.roomCode) return;
+    if (!state.useLan || !state.roomCode || !state._lanPollActive) return;
+    if (state._lanAbort) {
+      try { state._lanAbort.abort(); } catch (e) {}
+    }
+    var ctrl = (typeof AbortController !== 'undefined') ? new AbortController() : null;
+    state._lanAbort = ctrl;
     var url = lanBaseUrl() + '/poll?room=' + encodeURIComponent(state.roomCode) + '&since=' + (state.lanSince || 0);
-    fetch(url).then(function (r) { return r.json(); }).then(function (j) {
-      if (!j || !j.messages) return;
-      j.messages.forEach(function (m) {
-        if (m.id > state.lanSince) state.lanSince = m.id;
-        if (!m.data) return;
-        // ignore own poses for apply but host still relays conceptually (everyone polls)
-        handlePeerData(m.data, !!state.isHost, null);
-      });
-    }).catch(function () {});
+    var finished = false;
+    var watchdog = setTimeout(function () {
+      if (finished) return;
+      finished = true;
+      if (ctrl) try { ctrl.abort(); } catch (e) {}
+      // schedule next even if this one hung
+      if (state._lanPollActive) {
+        state.lanPollTimer = setTimeout(lanPollOnce, 40);
+      }
+    }, 1500);
+
+    var opts = { cache: 'no-store' };
+    if (ctrl) opts.signal = ctrl.signal;
+
+    fetch(url, opts).then(function (r) { return r.json(); }).then(function (j) {
+      if (finished) return;
+      finished = true;
+      clearTimeout(watchdog);
+      if (j && j.messages && j.messages.length) {
+        var latestPose = {};
+        var ordered = [];
+        j.messages.forEach(function (m) {
+          if (m.id > (state.lanSince || 0)) state.lanSince = m.id;
+          if (!m.data) return;
+          var d = m.data;
+          if (d.type === 'pose' && d.id) latestPose[d.id] = d;
+          else ordered.push(d);
+        });
+        ordered.forEach(function (d) {
+          if (d.id && d.id === state.myNetId) {
+            if (d.type === 'pose' || d.type === 'custom' || d.type === 'leave') return;
+          }
+          if (d.type === 'start' && state.mode === 'play') return;
+          handlePeerData(d, !!state.isHost, null);
+        });
+        Object.keys(latestPose).forEach(function (pid) {
+          if (pid === state.myNetId) return;
+          handlePeerData(latestPose[pid], !!state.isHost, null);
+        });
+      }
+      // Sequential chain — never piles up intervals; always continues
+      if (state._lanPollActive) {
+        var delay = (state.mode === 'play') ? 30 : 50;
+        // Background tabs get throttled by Chrome — still try
+        if (typeof document !== 'undefined' && document.hidden) delay = 100;
+        state.lanPollTimer = setTimeout(lanPollOnce, delay);
+      }
+    }).catch(function () {
+      if (finished) return;
+      finished = true;
+      clearTimeout(watchdog);
+      if (state._lanPollActive) {
+        state.lanPollTimer = setTimeout(lanPollOnce, 80);
+      }
+    });
   }
 
   function startLanPoll() {
     stopLanPoll();
     state.lanSince = 0;
+    state._lanSendInflight = 0;
+    state._lanPollActive = true;
     lanPollOnce();
-    state.lanPollTimer = setInterval(lanPollOnce, 50);
   }
+
+  // When tab becomes visible again, kick the network hard (Chrome throttles background tabs)
+  document.addEventListener('visibilitychange', function () {
+    if (!document.hidden && state.useLan && state._lanPollActive) {
+      if (state.lanPollTimer) { clearTimeout(state.lanPollTimer); state.lanPollTimer = null; }
+      lanPollOnce();
+      if (state.mode === 'play') {
+        try { sendMyPose(); } catch (e) {}
+      }
+    }
+  });
 
   function lanCheckHost(ip, cb) {
     var url = 'http://' + ip + ':' + (state.lanPort || 27100) + '/status';
@@ -3005,24 +3547,38 @@
     var hint = document.getElementById('net-players-hint');
     if (state.playType !== 'online') {
       if (hint) hint.style.display = 'none';
-      // restore default 2 cards for split if needed
       return;
     }
     if (hint) hint.style.display = 'block';
     list.innerHTML = '';
     var roster = state.netRoster || [];
     if (!roster.length) {
-      roster = [{ id: 'host', name: 'القائد', isHost: true }];
+      roster = [{ id: 'host', name: state.playerName || 'القائد', isHost: true }];
     }
     roster.forEach(function (p, i) {
       var card = document.createElement('div');
       card.className = 'player-card ready' + (p.isHost ? ' host' : '');
       if (p.id === state.myNetId) card.style.borderColor = '#00d4ff';
+      var nameStr = (p.name || ('لاعب ' + (i + 1))) + (p.id === state.myNetId ? ' (أنت)' : '');
       card.innerHTML =
         '<div class="avatar">' + (p.isHost ? '👑' : '🎮') + '</div>' +
         '<div class="player-info">' +
-        '<span class="name">' + (p.name || ('لاعب ' + (i + 1))) + (p.id === state.myNetId ? ' (أنت)' : '') + '</span>' +
+        '<span class="name">' + nameStr + '</span>' +
         '<span class="status online">READY ✓</span></div>';
+      // Host can kick others
+      if (state.isHost && !p.isHost && p.id !== state.myNetId) {
+        var kickBtn = document.createElement('button');
+        kickBtn.className = 'btn-kick';
+        kickBtn.textContent = 'طرد';
+        kickBtn.type = 'button';
+        kickBtn.onclick = (function (targetId, targetName) {
+          return function (e) {
+            e.stopPropagation();
+            kickPlayer(targetId, targetName);
+          };
+        })(p.id, p.name);
+        card.appendChild(kickBtn);
+      }
       list.appendChild(card);
     });
     var canStart = state.isHost && roster.length >= 2;
@@ -3033,21 +3589,60 @@
     }
   }
 
+  function kickPlayer(targetId, targetName) {
+    if (!state.isHost || !targetId) return;
+    // Notify everyone
+    var msg = { type: 'kick', id: targetId };
+    if (state.useLan) lanSend(msg);
+    else broadcastToAll(msg);
+    // Close peer connection if any
+    if (state.connections) {
+      state.connections.forEach(function (c) {
+        if (c._netId === targetId) {
+          try { c.send({ type: 'kick', id: targetId }); } catch (e) {}
+          try { c.close(); } catch (e) {}
+        }
+      });
+      state.connections = state.connections.filter(function (c) { return c._netId !== targetId; });
+    }
+    // Remove from roster locally
+    state.netRoster = (state.netRoster || []).filter(function (r) { return r.id !== targetId; });
+    if (state.remoteMeshes[targetId]) {
+      scene.remove(state.remoteMeshes[targetId]);
+      delete state.remoteMeshes[targetId];
+    }
+    renderNetLobbyList();
+    toast('تم طرد ' + (targetName || 'اللاعب'), 'info');
+  }
+
   function clearRemoteMeshes() {
     Object.keys(state.remoteMeshes || {}).forEach(function (id) {
       var m = state.remoteMeshes[id];
       if (m) scene.remove(m);
     });
     state.remoteMeshes = {};
+    state.remoteTargets = {};
   }
 
-  function ensureRemoteMesh(netId, custom) {
+  function ensureRemoteMesh(netId, custom, displayName) {
     if (netId === state.myNetId) return null;
-    if (state.remoteMeshes[netId]) return state.remoteMeshes[netId];
+    if (state.remoteMeshes[netId]) {
+      if (displayName && state.remoteMeshes[netId].userData.displayName !== displayName) {
+        attachNameTag(state.remoteMeshes[netId], displayName, true);
+      }
+      return state.remoteMeshes[netId];
+    }
     var colors = [0xb91c1c, 0x16a34a, 0xca8a04, 0x7c3aed, 0x0891b2, 0xdb2777, 0x65a30d];
     var idx = Object.keys(state.remoteMeshes).length % colors.length;
     var mesh = createCharacterMesh(colors[idx], 0xe0ac69, custom || null);
     mesh.position.set(idx * 2, 0, 2);
+    var nm = displayName;
+    if (!nm && state.netRoster) {
+      for (var i = 0; i < state.netRoster.length; i++) {
+        if (state.netRoster[i].id === netId) { nm = state.netRoster[i].name; break; }
+      }
+    }
+    attachNameTag(mesh, nm || 'لاعب', true);
     scene.add(mesh);
     state.remoteMeshes[netId] = mesh;
     return mesh;
@@ -3055,20 +3650,24 @@
 
   function applyNetPose(d) {
     if (!d || d.id === state.myNetId) return;
-    var mesh = ensureRemoteMesh(d.id, d.custom);
+    var mesh = ensureRemoteMesh(d.id, d.custom, d.name);
     if (!mesh) return;
     // refresh clothes if custom changed
     if (d.custom && mesh.userData._customKey !== JSON.stringify(d.custom)) {
       var pos = mesh.position.clone();
       var rot = mesh.rotation.y;
+      var oldName = mesh.userData.displayName;
       scene.remove(mesh);
       var neu = createCharacterMesh(0xb91c1c, 0xe0ac69, d.custom);
       neu.position.copy(pos);
       neu.rotation.y = rot;
       neu.userData._customKey = JSON.stringify(d.custom);
+      attachNameTag(neu, d.name || oldName || 'لاعب', true);
       scene.add(neu);
       state.remoteMeshes[d.id] = neu;
       mesh = neu;
+    } else if (d.name && mesh.userData.displayName !== d.name) {
+      attachNameTag(mesh, d.name, true);
     }
     if (!state.remoteTargets) state.remoteTargets = {};
     state.remoteTargets[d.id] = {
@@ -3105,17 +3704,25 @@
       var mesh = state.remoteMeshes[id];
       var t = state.remoteTargets[id];
       if (!mesh || !t) continue;
-      // smooth follow — reduces stutter on LAN/net
-      var lerp = Math.min(1, 18 * delta);
-      mesh.position.x += (t.x - mesh.position.x) * lerp;
-      mesh.position.y += (t.y - mesh.position.y) * lerp;
-      mesh.position.z += (t.z - mesh.position.z) * lerp;
+      var dx = t.x - mesh.position.x;
+      var dy = t.y - mesh.position.y;
+      var dz = t.z - mesh.position.z;
+      var dist2 = dx * dx + dy * dy + dz * dz;
+      // snap if far; otherwise follow quickly (avoids looking frozen)
+      if (dist2 > 4) {
+        mesh.position.set(t.x, t.y, t.z);
+      } else {
+        var lerp = Math.min(1, 35 * delta);
+        mesh.position.x += dx * lerp;
+        mesh.position.y += dy * Math.min(1, 45 * delta);
+        mesh.position.z += dz * lerp;
+      }
       var cy = mesh.rotation.y;
       var ty = t.yaw;
-      var dy = ty - cy;
-      while (dy > Math.PI) dy -= Math.PI * 2;
-      while (dy < -Math.PI) dy += Math.PI * 2;
-      mesh.rotation.y = cy + dy * lerp;
+      var dYaw = ty - cy;
+      while (dYaw > Math.PI) dYaw -= Math.PI * 2;
+      while (dYaw < -Math.PI) dYaw += Math.PI * 2;
+      mesh.rotation.y = cy + dYaw * Math.min(1, 30 * delta);
       // walk anim if moving
       if (t.moving && mesh.userData && mesh.userData.leftArm) {
         mesh.userData.walkCycle = (mesh.userData.walkCycle || 0) + delta * 10;
@@ -3130,36 +3737,50 @@
 
   function sendMyPose() {
     var p = players[0];
-    if (!p || !p.group) return;
+    if (!p || !p.group || !state.myNetId) return;
     var moving = false;
+    var airborne = p.group.position.y > 0.05;
     if (p.group.userData && p.group.userData._lastPos) {
       var lp = p.group.userData._lastPos;
-      var dx = p.group.position.x - lp.x, dz = p.group.position.z - lp.z;
-      moving = (dx * dx + dz * dz) > 0.00005;
+      var dx = p.group.position.x - lp.x, dy = p.group.position.y - lp.y, dz = p.group.position.z - lp.z;
+      moving = (dx * dx + dz * dz) > 0.00005 || Math.abs(dy) > 0.01;
     }
     p.group.userData._lastPos = p.group.position.clone();
     var custom = null;
     try {
-      custom = state.isHost
-        ? (typeof playerCustom !== 'undefined' ? playerCustom[0] : null)
-        : (typeof playerCustom !== 'undefined' ? (playerCustom[1] || playerCustom[0]) : null);
+      custom = (typeof playerCustom !== 'undefined') ? playerCustom[0] : null;
     } catch (e) {}
+    // Only attach full custom when it changes (cuts LAN bandwidth a lot)
+    var customKey = custom ? JSON.stringify(custom) : '';
+    var sendCustom = null;
+    if (customKey !== state._lastSentCustomKey) {
+      state._lastSentCustomKey = customKey;
+      sendCustom = custom;
+    }
+    // compact pose — fewer fields = less JSON parse time on LAN bus
     var msg = {
       type: 'pose',
       id: state.myNetId,
-      x: p.group.position.x,
-      y: p.group.position.y,
-      z: p.group.position.z,
-      yaw: p.yaw,
-      moving: moving,
-      custom: custom,
-      inVehicle: !!p.vehicle,
-      vehicleName: (p.vehicle && p.vehicle.userData) ? (p.vehicle.userData.instanceName || null) : null,
-      vehicleX: p.vehicle ? p.vehicle.position.x : null,
-      vehicleY: p.vehicle ? p.vehicle.position.y : null,
-      vehicleZ: p.vehicle ? p.vehicle.position.z : null,
-      vehicleYaw: p.vehicle ? p.vehicle.rotation.y : null
+      x: Math.round(p.group.position.x * 100) / 100,
+      y: Math.round(p.group.position.y * 100) / 100,
+      z: Math.round(p.group.position.z * 100) / 100,
+      yaw: Math.round(p.yaw * 1000) / 1000,
+      moving: moving
     };
+    // name only occasionally (every ~1s) to save bandwidth
+    state._nameTick = (state._nameTick || 0) + 1;
+    if (state._nameTick === 1 || state._nameTick % 40 === 0) {
+      msg.name = state.playerName || 'لاعب';
+    }
+    if (p.vehicle) {
+      msg.inVehicle = true;
+      msg.vehicleName = (p.vehicle.userData && p.vehicle.userData.instanceName) || null;
+      msg.vehicleX = Math.round(p.vehicle.position.x * 100) / 100;
+      msg.vehicleY = Math.round(p.vehicle.position.y * 100) / 100;
+      msg.vehicleZ = Math.round(p.vehicle.position.z * 100) / 100;
+      msg.vehicleYaw = Math.round(p.vehicle.rotation.y * 1000) / 1000;
+    }
+    if (sendCustom) msg.custom = sendCustom;
     if (state.useLan) {
       lanSend(msg);
     } else if (state.isHost) {
@@ -3181,7 +3802,7 @@
         }
         if (!state.netRoster) state.netRoster = [];
         if (!state.netRoster.some(function (r) { return r.isHost; })) {
-          state.netRoster.unshift({ id: state.myNetId || 'host', name: 'القائد', isHost: true });
+          state.netRoster.unshift({ id: state.myNetId || 'host', name: state.playerName || 'القائد', isHost: true });
         }
         // avoid duplicate join
         if (state.netRoster.some(function (r) { return r.id === newId; })) {
@@ -3220,7 +3841,12 @@
       }
     }
     if (d.type === 'welcome') {
-      state.myNetId = d.yourId;
+      // CRITICAL: host must IGNORE welcome echoes on the LAN bus
+      // otherwise state.myNetId becomes the joiner's id and all pose sync breaks
+      if (state.isHost) {
+        return;
+      }
+      if (d.yourId) state.myNetId = d.yourId;
       state.netRoster = d.roster || [];
       renderNetLobbyList();
       document.getElementById('gamepad-hint').textContent = 'متصل — أنت في اللوبي (' + state.netRoster.length + ' لاعبين)';
@@ -3228,34 +3854,72 @@
       document.getElementById('btn-start-game').textContent = 'في انتظار القائد...';
     }
     if (d.type === 'roster') {
-      state.netRoster = d.roster || [];
-      renderNetLobbyList();
+      // Host already has authoritative roster; still allow refresh from self-broadcast is ok
+      if (d.roster && d.roster.length) {
+        state.netRoster = d.roster;
+        renderNetLobbyList();
+      }
     }
     if (d.type === 'full') {
       toast('اللوبية ممتلئة', 'error');
     }
     if (d.type === 'custom') {
       if (d.id && d.custom) {
-        applyNetPose({ id: d.id, x: 0, y: 0, z: 0, yaw: 0, custom: d.custom, moving: false });
-        // if mesh exists only update clothes
+        // update roster custom/name
+        if (state.netRoster) {
+          state.netRoster.forEach(function (r) {
+            if (r.id === d.id) {
+              r.custom = d.custom;
+              if (d.name) r.name = d.name;
+            }
+          });
+        }
         var mesh = state.remoteMeshes[d.id];
         if (mesh && d.custom) {
           var pos = mesh.position.clone();
           var rotY = mesh.rotation.y;
+          var oldName = mesh.userData.displayName || d.name;
           scene.remove(mesh);
           var neu = createCharacterMesh(0xb91c1c, 0xe0ac69, d.custom);
           neu.position.copy(pos);
           neu.rotation.y = rotY;
           neu.userData._customKey = JSON.stringify(d.custom);
+          attachNameTag(neu, d.name || oldName || 'لاعب', true);
           scene.add(neu);
           state.remoteMeshes[d.id] = neu;
         }
+        renderNetLobbyList();
       }
       if (isHostSide && !state.useLan) broadcastToAll(d, fromConn);
     }
     if (d.type === 'pose') {
       applyNetPose(d);
       // PeerJS: host relays. LAN: everyone already sees the bus — no relay
+      if (isHostSide && !state.useLan) broadcastToAll(d, fromConn);
+    }
+    if (d.type === 'kick') {
+      if (d.id === state.myNetId) {
+        // I was kicked
+        toast('تم طردك من اللوبي', 'error');
+        stopLanPoll && stopLanPoll();
+        if (state.peer) try { state.peer.destroy(); } catch (e) {}
+        state.peer = null; state.connection = null; state.connections = [];
+        state.netRoster = []; state.myNetId = null; state.player2Joined = false;
+        clearRemoteMeshes();
+        closePause && closePause();
+        showScreen('menu');
+        showUI('main-menu');
+        return;
+      }
+      // Someone else was kicked
+      if (d.id && state.remoteMeshes[d.id]) {
+        scene.remove(state.remoteMeshes[d.id]);
+        delete state.remoteMeshes[d.id];
+      }
+      if (state.netRoster) {
+        state.netRoster = state.netRoster.filter(function (r) { return r.id !== d.id; });
+        renderNetLobbyList();
+      }
       if (isHostSide && !state.useLan) broadcastToAll(d, fromConn);
     }
     if (d.type === 'start') {
@@ -3267,33 +3931,57 @@
         });
       }
       if (d.roster) state.netRoster = d.roster;
-      if (levelId && state.levels[levelId]) loadLevelIntoScene(levelId);
-      else if (levelId) loadLevelIntoScene(levelId);
-      else clearBuildObjects();
+      if (levelId && state.levels[levelId]) {
+        state.currentLevelId = levelId;
+        loadLevelIntoScene(levelId);
+      } else if (levelId) {
+        state.currentLevelId = levelId;
+        loadLevelIntoScene(levelId);
+      } else clearBuildObjects();
+      clearRespawnMarkers(); // build-only visuals
       setupPlayersForNet();
+      state._lastSentCustomKey = null;
       showScreen('play');
       var labels = document.getElementById('split-labels');
       if (labels) labels.style.display = 'none';
       if (levelId) setTimeout(function () { runLevelScripts(levelId); }, 100);
+      setTimeout(function () { try { sendMyPose(); } catch (e) {} }, 100);
+      setTimeout(function () { try { sendMyPose(); } catch (e) {} }, 400);
     }
     if (d.type === 'exit' || d.type === 'leave') {
       var leftId = d.id;
-      if (leftId && state.remoteMeshes[leftId]) {
+      if (!leftId || leftId === state.myNetId) return;
+      if (state.remoteMeshes[leftId]) {
         scene.remove(state.remoteMeshes[leftId]);
         delete state.remoteMeshes[leftId];
       }
+      if (state.remoteTargets) delete state.remoteTargets[leftId];
+      var leftName = d.name || 'لاعب';
+      var leftWasHost = !!d.isHost;
       if (state.netRoster) {
+        state.netRoster.forEach(function (r) {
+          if (r.id === leftId) {
+            leftName = r.name || leftName;
+            if (r.isHost) leftWasHost = true;
+          }
+        });
         state.netRoster = state.netRoster.filter(function (r) { return r.id !== leftId; });
         renderNetLobbyList();
       }
-      toast('لاعب خرج', 'info');
-      if (!isHostSide && d.type === 'exit') {
+      toast(leftName + ' خرج', 'info');
+      // If host left, send everyone back to menu
+      if (leftWasHost && !state.isHost) {
         closePause && closePause();
         clearRemoteMeshes();
+        stopLanPoll && stopLanPoll();
         if (state.peer) try { state.peer.destroy(); } catch (e) {}
         state.connection = null; state.peer = null; state.connections = [];
+        state.useLan = false;
+        state.netRoster = [];
+        state.myNetId = null;
         showScreen('menu');
         showUI('main-menu');
+        toast('القائد خرج — انتهى اللوبي', 'error');
       }
     }
   }
@@ -3305,25 +3993,36 @@
     var myCustom = null;
     try {
       if (typeof playerCustom !== 'undefined') {
-        myCustom = state.isHost ? playerCustom[0] : (playerCustom[1] || playerCustom[0]);
+        // Everyone uses slot 0 for their own clothes
+        myCustom = playerCustom[0];
       }
     } catch (e) {}
+    var lanSpawns = getLevelRespawnPoints('lan');
+    // Assign spawn index by roster order
+    var myIndex = 0;
+    (state.netRoster || []).forEach(function (r, i) {
+      if (r.id === state.myNetId) myIndex = i;
+    });
+    var mySpawn = lanSpawns[myIndex % lanSpawns.length] || { x: 0, y: 0, z: 0 };
     players[0].group = createCharacterMesh(0x1e40af, 0xe0ac69, myCustom);
-    players[0].group.position.set(0, 0, 0);
+    players[0].group.position.set(mySpawn.x, 0, mySpawn.z);
     players[0].yaw = 0;
     players[0].velocity.set(0, 0, 0);
     scene.add(players[0].group);
+    // Local name tag exists but hidden for own camera
+    attachNameTag(players[0].group, state.playerName || 'أنا', false);
     // hide unused local p2 in online
     if (players[1].group) { scene.remove(players[1].group); players[1].group = null; }
     var aspect = window.innerWidth / window.innerHeight;
     players[0].camera = new THREE.PerspectiveCamera(70, aspect, 0.1, 400);
     players[1].camera = new THREE.PerspectiveCamera(70, aspect, 0.1, 400);
-    // spawn remote placeholders from roster
+    // spawn remote placeholders from roster at their LAN respawn points
     (state.netRoster || []).forEach(function (r, i) {
       if (r.id === state.myNetId) return;
-      ensureRemoteMesh(r.id, r.custom);
+      ensureRemoteMesh(r.id, r.custom, r.name);
       if (state.remoteMeshes[r.id]) {
-        state.remoteMeshes[r.id].position.set((i + 1) * 2.2, 0, 0);
+        var sp = lanSpawns[i % lanSpawns.length] || { x: (i + 1) * 2.2, y: 0, z: 0 };
+        state.remoteMeshes[r.id].position.set(sp.x, 0, sp.z);
       }
     });
   }
@@ -3331,7 +4030,7 @@
 
   // ===== STORY / ONLINE / PAUSE UI =====
   function hideAllScreens() {
-    ['main-menu','story-choice','online-confirm','online-hub','create-room','join-room','lobby-screen'].forEach(function (id) {
+    ['main-menu','story-choice','online-confirm','online-hub','create-room','join-room','lobby-screen','name-entry-screen'].forEach(function (id) {
       var el = document.getElementById(id);
       if (el) el.classList.add('hidden');
     });
@@ -3358,13 +4057,13 @@
     var list = document.getElementById('players-list');
     var hint = document.getElementById('net-players-hint');
     if (hint) hint.style.display = 'none';
+    var p1Name = state.playerName || 'اللاعب 1';
     if (list) {
       list.innerHTML =
         '<div class="player-card host ready" id="player1-card"><div class="avatar">💻</div><div class="player-info">' +
-        '<span class="name" id="p1-label">اللاعب 1</span><span class="status online" id="p1-status">READY</span></div></div>' +
+        '<span class="name" id="p1-label">' + p1Name + '</span><span class="status online" id="p1-status">READY</span></div></div>' +
         '<div class="player-card" id="player2-card"><div class="avatar" id="p2-avatar">🎮</div><div class="player-info">' +
         '<span class="name" id="p2-label">اللاعب 2</span><span class="status" id="player2-status">اضغط هنا أو X على الدراعة</span></div></div>';
-      // rebind click for p2
       var p2card = document.getElementById('player2-card');
       if (p2card) {
         p2card.style.cursor = 'pointer';
@@ -3387,14 +4086,89 @@
     document.getElementById('btn-start-game').disabled = true;
     document.getElementById('btn-start-game').textContent = 'START GAME';
     document.getElementById('gamepad-hint').textContent = 'اضغط كارت اللاعب 2 للجاهزية';
+    configureCustomUIForMode();
+    var levelBox = document.querySelector('.level-select-box');
+    if (levelBox) levelBox.style.display = '';
     showScreen('lobby');
   };
 
+  function checkLanServer(ip, cb) {
+    var base = normalizeLanHost(ip || '127.0.0.1');
+    var url = base + '/status';
+    var done = false;
+    var t = setTimeout(function () {
+      if (done) return;
+      done = true;
+      cb(false, null);
+    }, 4000);
+    fetch(url, { cache: 'no-cache' }).then(function (r) { return r.json(); }).then(function (j) {
+      if (done) return;
+      done = true;
+      clearTimeout(t);
+      cb(!!(j && j.ok), j);
+    }).catch(function () {
+      if (done) return;
+      done = true;
+      clearTimeout(t);
+      cb(false, null);
+    });
+  }
+
+  function runServerCheck(ip) {
+    var st = document.getElementById('server-check-status');
+    var okBtn = document.getElementById('btn-online-ok');
+    ip = (ip || '127.0.0.1').trim();
+    if (st) { st.textContent = 'جاري فحص السيرفر على ' + ip + ' ...'; st.style.color = '#94a3b8'; }
+    if (okBtn) { okBtn.disabled = true; okBtn.textContent = 'جاري الفحص...'; }
+    checkLanServer(ip, function (ok, info) {
+      if (ok) {
+        if (st) { st.textContent = 'السيرفر شغال ✓ على ' + ip; st.style.color = '#30d158'; }
+        if (okBtn) { okBtn.disabled = false; okBtn.textContent = 'موافق — متابعة'; }
+        state._lastCheckedLanIp = ip;
+        if (info && info.ips && info.ips.length) state._detectedLanIps = info.ips;
+        // prefill create/join IP fields
+        var ci = document.getElementById('create-ip-input');
+        var ji = document.getElementById('join-ip-input');
+        if (ci) ci.value = ip;
+        if (ji) ji.value = ip;
+      } else {
+        if (st) {
+          st.innerHTML = 'السيرفر مش شغال على ' + ip + ' ❌<br><span style="font-weight:500;font-size:0.85rem">القائد: شغّل python lan_host.py ثم cloudflared tunnel --url http://localhost:27100<br>المنضم: الصق نفس رابط trycloudflare.com أو IP القائد</span>';
+          st.style.color = '#ff6b8a';
+        }
+        if (okBtn) { okBtn.disabled = true; okBtn.textContent = 'السيرفر مش شغال بعد'; }
+      }
+    });
+  }
+
   var btnOnline = document.getElementById('btn-online-mode');
-  if (btnOnline) btnOnline.onclick = function () { showUI('online-confirm'); };
+  if (btnOnline) btnOnline.onclick = function () {
+    showUI('online-confirm');
+    var ipEl = document.getElementById('confirm-server-ip');
+    // auto-check current field (localhost for host, or previously used IP)
+    var ip = (ipEl && ipEl.value) ? ipEl.value.trim() : '127.0.0.1';
+    runServerCheck(ip);
+  };
+
+  var btnCheckServer = document.getElementById('btn-check-server');
+  if (btnCheckServer) btnCheckServer.onclick = function () {
+    var ipEl = document.getElementById('confirm-server-ip');
+    var ip = (ipEl && ipEl.value) ? ipEl.value.trim() : '';
+    if (!ip) { toast('اكتب IP السيرفر', 'error'); return; }
+    runServerCheck(ip);
+  };
 
   var btnOnlineOk = document.getElementById('btn-online-ok');
-  if (btnOnlineOk) btnOnlineOk.onclick = function () { showUI('online-hub'); };
+  if (btnOnlineOk) btnOnlineOk.onclick = function () {
+    if (btnOnlineOk.disabled) {
+      toast('افحص السيرفر أولًا بـ IP الصحيح', 'error');
+      return;
+    }
+    showUI('online-hub');
+    var hub = document.getElementById('hub-server-status');
+    var ip = state._lastCheckedLanIp || '127.0.0.1';
+    if (hub) hub.textContent = 'السيرفر متصل ✓ (' + ip + ')';
+  };
 
   var btnOnlineCancel = document.getElementById('btn-online-cancel');
   if (btnOnlineCancel) btnOnlineCancel.onclick = function () { showUI('story-choice'); };
@@ -3406,10 +4180,23 @@
   if (btnOnlineHubBack) btnOnlineHubBack.onclick = function () { showUI('story-choice'); };
 
   var btnOnlineCreate = document.getElementById('btn-online-create');
-  if (btnOnlineCreate) btnOnlineCreate.onclick = function () { showUI('create-room'); };
+  if (btnOnlineCreate) btnOnlineCreate.onclick = function () {
+    showUI('create-room');
+    var ipEl = document.getElementById('create-ip-input');
+    if (ipEl && state._detectedLanIps && state._detectedLanIps.length) {
+      // prefer first non-empty detected IP
+      ipEl.value = state._detectedLanIps[0];
+    }
+  };
 
   var btnOnlineJoin = document.getElementById('btn-online-join');
-  if (btnOnlineJoin) btnOnlineJoin.onclick = function () { showUI('join-room'); };
+  if (btnOnlineJoin) btnOnlineJoin.onclick = function () {
+    showUI('join-room');
+    var ipEl = document.getElementById('join-ip-input');
+    if (ipEl && state._detectedLanIps && state._detectedLanIps.length && (!ipEl.value || ipEl.value === '127.0.0.1')) {
+      ipEl.value = state._detectedLanIps[0];
+    }
+  };
 
   var btnCreateBack = document.getElementById('btn-create-back');
   if (btnCreateBack) btnCreateBack.onclick = function () { showUI('online-hub'); };
@@ -3428,7 +4215,7 @@
     state.myNetId = isHost ? ('host_' + code) : null;
     clearRemoteMeshes();
 
-    document.getElementById('lobby-title').textContent = isHost ? '⚔️ لوبي القائد (LAN)' : '⚔️ لوبي المنضم';
+    document.getElementById('lobby-title').textContent = isHost ? '⚔️ لوبي القائد (سيرفر)' : '⚔️ لوبي المنضم';
     document.getElementById('lobby-code-display').style.display = 'block';
     document.getElementById('lobby-code-display').textContent = 'الرمز: ' + code;
     document.getElementById('gamepad-hint').textContent = isHost
@@ -3436,7 +4223,7 @@
       : 'جاري الاتصال...';
 
     if (isHost) {
-      state.netRoster = [{ id: state.myNetId, name: 'القائد', isHost: true }];
+      state.netRoster = [{ id: state.myNetId, name: state.playerName || 'القائد', isHost: true }];
       document.getElementById('btn-start-game').disabled = true;
       document.getElementById('btn-start-game').textContent = 'انتظر لاعبين...';
     } else {
@@ -3444,27 +4231,14 @@
       document.getElementById('btn-start-game').textContent = 'في انتظار القائد...';
     }
     renderNetLobbyList();
+    configureCustomUIForMode();
     // Joiner: clothes only — no level control
     var levelBox = document.querySelector('.level-select-box');
-    var customSel = document.getElementById('custom-player-select');
     if (!isHost) {
       if (levelBox) levelBox.style.display = 'none';
-      if (customSel) {
-        customSel.innerHTML = '<option value="1">ملابسي فقط</option>';
-        customSel.value = '1';
-        customSel.disabled = true;
-      }
-      var hint = document.getElementById('gamepad-hint');
-      if (hint && !isHost) {
-        // will be overwritten on connect; base message:
-      }
-      toast('المنضم يعدّل ملابسه فقط — اختيار اللفل للقائد', 'info');
+      toast('تعدّل ملابسك فقط — اختيار اللفل للقائد', 'info');
     } else {
       if (levelBox) levelBox.style.display = '';
-      if (customSel) {
-        customSel.disabled = false;
-        customSel.innerHTML = '<option value="0">اللاعب 1</option><option value="1">اللاعب 2</option>';
-      }
     }
 
     try {
@@ -3491,12 +4265,12 @@
           state.connection = conn;
           conn.on('open', function () {
             hideSyncLoading();
-            try { readCustomFromUI && readCustomFromUI(1); } catch (e) {}
+            try { readCustomFromUI && readCustomFromUI(0); } catch (e) {}
             try {
               conn.send({
                 type: 'join',
-                custom: (typeof playerCustom !== 'undefined' ? playerCustom[1] : null),
-                name: 'لاعب'
+                custom: (typeof playerCustom !== 'undefined' ? playerCustom[0] : null),
+                name: state.playerName || 'لاعب'
               });
             } catch (e) {}
             toast('انضممت للوبي', 'success');
@@ -3612,7 +4386,12 @@
     state.connections = [];
     state.connection = null;
     state.myNetId = isHost ? ('host_' + code) : ('p_' + Date.now().toString(36));
-    state.netRoster = isHost ? [{ id: state.myNetId, name: 'القائد', isHost: true }] : [];
+    state.netRoster = isHost ? [{
+      id: state.myNetId,
+      name: state.playerName || 'القائد',
+      isHost: true,
+      custom: (typeof playerCustom !== 'undefined' ? playerCustom[0] : null)
+    }] : [];
     clearRemoteMeshes();
     stopLanPoll();
 
@@ -3624,71 +4403,78 @@
       : 'جاري الانضمام عبر LAN...';
 
     var levelBox = document.querySelector('.level-select-box');
-    var customSel = document.getElementById('custom-player-select');
     if (!isHost) {
       if (levelBox) levelBox.style.display = 'none';
-      if (customSel) {
-        customSel.innerHTML = '<option value="1">ملابسي فقط</option>';
-        customSel.value = '1';
-        customSel.disabled = true;
-      }
     } else {
       if (levelBox) levelBox.style.display = '';
-      if (customSel) {
-        customSel.disabled = false;
-        customSel.innerHTML = '<option value="0">اللاعب 1</option><option value="1">اللاعب 2</option>';
-      }
       document.getElementById('btn-start-game').disabled = true;
       document.getElementById('btn-start-game').textContent = 'انتظر لاعبين...';
     }
+    configureCustomUIForMode();
     renderNetLobbyList();
     showScreen('lobby');
     startLanPoll();
 
     if (!isHost) {
-      // announce join on LAN bus
       setTimeout(function () {
-        try { readCustomFromUI && readCustomFromUI(1); } catch (e) {}
+        try { readCustomFromUI && readCustomFromUI(0); } catch (e) {}
         lanSend({
           type: 'join',
           clientId: state.myNetId,
-          name: 'لاعب',
-          custom: (typeof playerCustom !== 'undefined' ? playerCustom[1] : null)
+          name: state.playerName || 'لاعب',
+          custom: (typeof playerCustom !== 'undefined' ? playerCustom[0] : null)
         });
-        toast('انضممت عبر LAN', 'success');
+        toast('انضممت عبر السيرفر', 'success');
         document.getElementById('gamepad-hint').textContent = 'متصل عبر LAN — بانتظار القائد';
         document.getElementById('btn-start-game').disabled = true;
         document.getElementById('btn-start-game').textContent = 'في انتظار القائد...';
       }, 200);
     } else {
-      toast('لوبي LAN جاهز — من غير إنترنت', 'success');
+      toast('لوبي السيرفر جاهز — أونلاين عام أو LAN', 'success');
     }
   }
 
   var btnDoCreate = document.getElementById('btn-do-create');
   if (btnDoCreate) btnDoCreate.onclick = function () {
     var code = (document.getElementById('create-code-input').value || '').trim().toLowerCase().replace(/\s+/g, '');
+    var ip = (document.getElementById('create-ip-input') && document.getElementById('create-ip-input').value || '127.0.0.1').trim();
     if (!code || code.length < 2) { toast('اكتب رمز صالح', 'error'); return; }
+    if (!ip) { toast('اكتب IP السيرفر', 'error'); return; }
     if (!createZipReady) {
       toast('ارفع الملف الشامل أولاً', 'error');
       if (createUploadInput) createUploadInput.click();
       return;
     }
-    state.useLan = false;
-    setupOnlineLobby(true, code);
+    toast('جاري التحقق من السيرفر...', 'info');
+    checkLanServer(ip, function (ok) {
+      if (!ok) {
+        toast('السيرفر مش شغال — تأكد من python lan_host.py ورابط cloudflared', 'error');
+        return;
+      }
+      // الأونلاين = LAN فقط عبر lan_host (مفيش PeerJS منفصل)
+      setupLanLobby(true, code, ip);
+    });
   };
 
   var btnDoJoin = document.getElementById('btn-do-join');
   if (btnDoJoin) btnDoJoin.onclick = function () {
     var code = (document.getElementById('join-code-input').value || '').trim().toLowerCase().replace(/\s+/g, '');
+    var ip = (document.getElementById('join-ip-input') && document.getElementById('join-ip-input').value || '127.0.0.1').trim();
     if (!code || code.length < 2) { toast('اكتب رمز الروم', 'error'); return; }
+    if (!ip) { toast('اكتب IP السيرفر', 'error'); return; }
     if (!joinZipReady) {
       toast('ارفع الملف الشامل أولاً', 'error');
       if (joinUploadInput) joinUploadInput.click();
       return;
     }
-    state.useLan = false;
-    setupOnlineLobby(false, code);
+    toast('جاري التحقق من السيرفر...', 'info');
+    checkLanServer(ip, function (ok) {
+      if (!ok) {
+        toast('مش واصل للسيرفر — تأكد إن القائد فاتح Python + الرابط العام', 'error');
+        return;
+      }
+      setupLanLobby(false, code, ip);
+    });
   };
 
   // Fullscreen button (any page)
@@ -3996,6 +4782,48 @@
     });
   }
 
+  function updateMenuNameDisplay() {
+    var el = document.getElementById('menu-player-name');
+    if (el) el.textContent = state.playerName ? ('مرحباً، ' + state.playerName) : '';
+  }
+
+  function showNameEntry(force) {
+    var saved = '';
+    try { saved = localStorage.getItem('storyModePlayerName') || ''; } catch (e) {}
+    if (!force && saved.trim()) {
+      state.playerName = saved.trim().slice(0, 16);
+      updateMenuNameDisplay();
+      showScreen('menu');
+      showUI('main-menu');
+      return;
+    }
+    hideAllScreens();
+    var ne = document.getElementById('name-entry-screen');
+    if (ne) ne.classList.remove('hidden');
+    var inp = document.getElementById('player-name-input');
+    if (inp) {
+      inp.value = saved || state.playerName || '';
+      setTimeout(function () { inp.focus(); }, 50);
+    }
+  }
+
+  function savePlayerNameFromUI() {
+    var inp = document.getElementById('player-name-input');
+    var name = (inp && inp.value ? inp.value : '').trim().slice(0, 16);
+    if (!name) {
+      toast('اكتب اسمك أولاً', 'error');
+      return;
+    }
+    state.playerName = name;
+    try { localStorage.setItem('storyModePlayerName', name); } catch (e) {}
+    updateMenuNameDisplay();
+    var ne = document.getElementById('name-entry-screen');
+    if (ne) ne.classList.add('hidden');
+    showScreen('menu');
+    showUI('main-menu');
+    toast('تم حفظ الاسم: ' + name, 'success');
+  }
+
   function finishLoading() {
     loadingScreen.classList.add('hidden');
     bindContextMenu();
@@ -4006,8 +4834,20 @@
     if (search) {
       search.oninput = function () { populateSidebar(search.value); };
     }
-    showScreen('menu');
-    showUI('main-menu');
+    // Name entry
+    var btnSaveName = document.getElementById('btn-save-player-name');
+    if (btnSaveName) btnSaveName.onclick = savePlayerNameFromUI;
+    var nameInp = document.getElementById('player-name-input');
+    if (nameInp) {
+      nameInp.onkeydown = function (e) {
+        if (e.key === 'Enter') savePlayerNameFromUI();
+      };
+    }
+    var btnChangeName = document.getElementById('btn-change-name');
+    if (btnChangeName) btnChangeName.onclick = function () { showNameEntry(true); };
+
+    // Update hideAllScreens list if needed - name entry is separate
+    showNameEntry(false);
     animate();
   }
   function init() { loadingText.textContent = 'جاهز'; setTimeout(finishLoading, 100); }

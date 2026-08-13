@@ -36,3 +36,37 @@ story-mode/
 
 - القائد: رمز + اختيار النسخة → تأكيد
 - المنضم: نفس الرمز + نفس النسخة → تأكيد (ملابس فقط)
+
+## الأونلاين (سيرفر القائد فقط — من غير VPN)
+
+زر **أونلاين** مربوط فقط بالشخص اللي شغّال عنده `python lan_host.py`.
+
+### على جهاز القائد
+
+1. شغّل السيرفر:
+   ```
+   python lan_host.py
+   ```
+2. للأونلاين من أي مكان (من غير Radmin/VPN) افتح تيرمينال تاني:
+   ```
+   cloudflared tunnel --url http://localhost:27100
+   ```
+3. انسخ الرابط اللي يطلع مثل:
+   `https://xxxx.trycloudflare.com`
+4. افتح `index.html` → أونلاين → الصق الرابط في خانة عنوان السيرفر → أنشئ اللوبي.
+
+### اللاعبين (من أي مكان)
+
+- أونلاين → انضمام
+- نفس **الرمز** + نفس **رابط trycloudflare.com**
+- يرفعوا نفس ملف البيانات (ZIP)
+
+### LAN فقط (نفس البيت / Radmin)
+
+استخدم IP المحلي بدل رابط cloudflared (مثل `192.168.1.10`).
+
+### تحميل cloudflared (مرة واحدة)
+
+https://developers.cloudflare.com/cloudflare-one/connections/connect-apps/install-and-setup/installation/
+
+صفحة المراقبة: `server.html`

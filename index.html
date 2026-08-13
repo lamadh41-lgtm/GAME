@@ -16,18 +16,34 @@
     </div>
   </div>
 
+  <!-- NAME ENTRY (first launch / change name) -->
+  <div id="name-entry-screen" class="screen hidden">
+    <div class="menu-container">
+      <h1 class="game-title">STORY MODE</h1>
+      <p class="subtitle">أدخل اسمك</p>
+      <p style="color:#94a3b8;margin-bottom:16px;font-size:0.9rem;text-align:center">الاسم هيظهر في اللوبي وفوق رأسك للاعبين التانيين</p>
+      <input type="text" id="player-name-input" class="room-input" placeholder="اكتب اسمك هنا..." maxlength="16" autocomplete="off" />
+      <div class="menu-buttons" style="margin-top:18px">
+        <button class="btn btn-primary" id="btn-save-player-name">حفظ والدخول</button>
+      </div>
+    </div>
+  </div>
+
   <!-- MAIN MENU -->
   <div id="main-menu" class="screen hidden">
     <div class="menu-container">
       <h1 class="game-title">STORY MODE</h1>
       <p class="subtitle">SPLIT • ONLINE LAN • BUILD</p>
+      <p id="menu-player-name" style="color:#00d4ff;font-weight:700;margin-bottom:8px;text-align:center"></p>
       <div class="menu-buttons">
         <button class="btn btn-primary" id="btn-story-mode">وضع القصة</button>
         <button class="btn btn-accent" id="btn-build-mode">وضع البناء (المطور)</button>
+        <a class="btn btn-success" href="server.html" style="text-align:center;text-decoration:none">لوحة السيرفر (LAN)</a>
+        <button class="btn btn-ghost" id="btn-change-name" style="font-size:0.85rem">تغيير الاسم</button>
       </div>
       <div class="info-box">
         <p>💻 لاعب 1: كيبورد + ماوس | 🎮 لاعب 2: دراع أو كيبورد</p>
-        <p>الأونلاين = اتصال مباشر بين اللاعبين (ند لند) — نفس الراوتر أو Radmin</p>
+        <p>الأونلاين = مرتبط بسيرفر القائد (Python) — من أي مكان عبر رابط عام أو LAN</p>
       </div>
     </div>
   </div>
@@ -38,7 +54,7 @@
       <h2 style="margin-bottom:24px">وضع القصة</h2>
       <div class="menu-buttons">
         <button class="btn btn-primary" id="btn-split-mode">Split Screen (نفس الجهاز)</button>
-        <button class="btn btn-accent" id="btn-online-mode">أونلاين (LAN)</button>
+        <button class="btn btn-accent" id="btn-online-mode">أونلاين (سيرفر)</button>
         <button class="btn btn-ghost" id="btn-story-back">رجوع</button>
       </div>
     </div>
@@ -47,14 +63,18 @@
   <!-- ONLINE CONFIRM -->
   <div id="online-confirm" class="screen hidden">
     <div class="menu-container">
-      <h2 style="margin-bottom:12px">⚠️ شبكة محلية</h2>
-      <p style="color:#94a3b8;margin-bottom:20px;line-height:1.7;font-size:0.95rem">
-        وضع الأونلاين يعتمد على <strong style="color:#00d4ff">الشبكة المحلية (LAN)</strong>.<br>
-        لازم تكونوا على نفس الشبكة (راوتر واحد أو برنامج مثل Hamachi).<br>
-        مش شرط يستهلك باقة نت — المهم وجود شبكة بين الجهازين.
+      <h2 style="margin-bottom:12px">⚠️ الأونلاين مربوط بسيرفر القائد فقط</h2>
+      <p style="color:#94a3b8;margin-bottom:14px;line-height:1.7;font-size:0.95rem">
+        <strong style="color:#fbbf24">القائد:</strong> يشغّل <code style="color:#67e8f9">python lan_host.py</code> ثم (للإنترنت) <code style="color:#67e8f9">cloudflared tunnel --url http://localhost:27100</code><br>
+        <strong style="color:#00d4ff">المنضم:</strong> يكتب <strong>رابط القائد العام</strong> أو IP (LAN/Radmin)
       </p>
+      <p style="color:#94a3b8;margin-bottom:8px;font-size:0.9rem;text-align:right">عنوان السيرفر (رابط cloudflared أو IP):</p>
+      <input type="text" id="confirm-server-ip" class="room-input" placeholder="مثال: https://xxxx.trycloudflare.com أو 192.168.1.10" value="127.0.0.1" />
+      <p id="server-check-status" style="text-align:center;margin:14px 0;font-weight:700;color:#94a3b8">اكتب العنوان ثم اضغط فحص</p>
       <div class="menu-buttons">
-        <button class="btn btn-primary" id="btn-online-ok">موافق — متابعة</button>
+        <button class="btn btn-accent" id="btn-check-server" type="button">🔍 فحص السيرفر</button>
+        <button class="btn btn-primary" id="btn-online-ok" disabled>السيرفر مش شغال بعد</button>
+        <a class="btn btn-ghost" href="server.html" style="text-align:center;text-decoration:none">لوحة السيرفر (للقائد)</a>
         <button class="btn btn-ghost" id="btn-online-cancel">رجوع</button>
       </div>
     </div>
@@ -63,7 +83,8 @@
   <!-- ONLINE HUB: create / join -->
   <div id="online-hub" class="screen hidden">
     <div class="menu-container">
-      <h2 style="margin-bottom:24px">أونلاين LAN</h2>
+      <h2 style="margin-bottom:12px">أونلاين (عبر سيرفر القائد)</h2>
+      <p id="hub-server-status" style="text-align:center;color:#30d158;font-weight:700;margin-bottom:18px;font-size:0.9rem">السيرفر متصل ✓</p>
       <div class="menu-buttons">
         <button class="btn btn-primary" id="btn-online-create">إنشاء لوبي</button>
         <button class="btn btn-accent" id="btn-online-join">انضمام للوبي</button>
@@ -78,7 +99,9 @@
       <h2 style="margin-bottom:16px">إنشاء لوبي</h2>
       <p style="color:#94a3b8;margin-bottom:10px;font-size:0.9rem">① اكتب رمز اللوبي</p>
       <input type="text" id="create-code-input" class="room-input" placeholder="مثال: room123" maxlength="20" />
-      <p style="color:#a78bfa;margin:14px 0 8px;font-size:0.85rem">② ارفع ملف البيانات الشامل</p>
+      <p style="color:#94a3b8;margin:14px 0 8px;font-size:0.9rem">② عنوان السيرفر (رابط cloudflared أو IP من lan_host)</p>
+      <input type="text" id="create-ip-input" class="room-input" placeholder="https://xxxx.trycloudflare.com أو 192.168.1.10" value="127.0.0.1" />
+      <p style="color:#a78bfa;margin:14px 0 8px;font-size:0.85rem">③ ارفع ملف البيانات الشامل</p>
       <input type="file" id="create-upload-input" accept=".zip,application/zip" class="hidden" />
       <button class="btn btn-accent" id="btn-create-pick-zip" style="width:100%;margin-bottom:8px">📁 رفع الملف الشامل</button>
       <p id="create-pack-status" style="color:#94a3b8;font-size:0.8rem;min-height:1.2em"></p>
@@ -94,7 +117,10 @@
     <div class="menu-container">
       <h2 style="margin-bottom:16px">انضمام للوبي</h2>
       <p style="color:#94a3b8;margin-bottom:10px;font-size:0.9rem">① اكتب رمز اللوبي</p>
-      <input type="text" id="join-code-input" class="room-input" placeholder="رمز اللوبي" maxlength="20" /><p style="color:#a78bfa;margin:14px 0 8px;font-size:0.85rem">② ارفع نفس ملف البيانات الشامل (زي القائد)</p>
+      <input type="text" id="join-code-input" class="room-input" placeholder="رمز اللوبي" maxlength="20" />
+      <p style="color:#94a3b8;margin:14px 0 8px;font-size:0.9rem">② نفس عنوان السيرفر (رابط القائد أو IP)</p>
+      <input type="text" id="join-ip-input" class="room-input" placeholder="https://xxxx.trycloudflare.com أو 192.168.1.10" value="127.0.0.1" />
+      <p style="color:#a78bfa;margin:14px 0 8px;font-size:0.85rem">③ ارفع نفس ملف البيانات الشامل (زي القائد)</p>
       <input type="file" id="join-upload-input" accept=".zip,application/zip" class="hidden" />
       <button class="btn btn-accent" id="btn-join-pick-zip" style="width:100%;margin-bottom:8px">📁 رفع الملف الشامل</button>
       <p id="join-upload-status" style="color:#94a3b8;font-size:0.8rem;min-height:1.2em"></p>
@@ -102,7 +128,7 @@
         <button class="btn btn-primary" id="btn-do-join">تأكيد والانضمام</button>
         <button class="btn btn-ghost" id="btn-join-back">رجوع</button>
       </div>
-      <p style="color:#64748b;margin-top:14px;font-size:0.75rem;text-align:center">ارفع الملف من جهازك ثم أكّد — من غير رفع مش هيدخل اللوبي</p>
+      <p style="color:#64748b;margin-top:14px;font-size:0.75rem;text-align:center">الأونلاين مربوط فقط باللي شغّال عليه python lan_host.py — من أي مكان عبر رابط cloudflared</p>
     </div>
   </div>
 
@@ -130,8 +156,9 @@
       <p id="net-players-hint" style="text-align:center;color:#94a3b8;font-size:0.8rem;margin:6px 0;display:none">يمكن انضمام حتى 8 لاعبين على الشبكة</p>
 
       <div class="custom-panel" id="custom-panel">
-        <h3 style="margin-bottom:10px;font-size:1rem;color:var(--gold)">تخصيص الشخصية</h3>
-        <div class="custom-row">
+        <h3 style="margin-bottom:10px;font-size:1rem;color:var(--gold)">تخصيص ملابسي</h3>
+        <p id="custom-owner-hint" style="color:#94a3b8;font-size:0.8rem;margin-bottom:8px">كل لاعب يعدّل ملابسه فقط</p>
+        <div class="custom-row" id="custom-player-row">
           <label>اللاعب</label>
           <select id="custom-player-select"><option value="0">اللاعب 1</option><option value="1">اللاعب 2</option></select>
         </div>
@@ -175,12 +202,23 @@
         <button class="cat-btn" data-cat="lights">إضاءة</button>
       </div>
       <div class="toolbar-section actions">
+        <button class="btn btn-sm btn-warning" id="btn-respawn-places">تحديد أماكن ريسبون</button>
         <button class="btn btn-sm btn-accent" id="btn-download-data">تحميل البيانات (ZIP)</button>
         <button class="btn btn-sm btn-primary" id="btn-upload-all" style="background:linear-gradient(135deg,#a855f7,#7c3aed)">رفع البيانات الشامل</button>
         <button class="btn btn-sm btn-success" id="btn-save-level">حفظ اللفل</button>
         <input type="file" id="upload-all-input" accept=".zip" class="hidden" />
         <button class="btn btn-sm btn-ghost" id="btn-exit-build">خروج</button>
       </div>
+    </div>
+    <!-- Respawn mode choice panel -->
+    <div id="respawn-choice-panel" class="respawn-choice-panel hidden">
+      <div class="respawn-choice-title">تحديد أماكن ريسبون اللاعبين</div>
+      <div class="respawn-choice-btns">
+        <button class="btn btn-sm" id="btn-respawn-lan" style="background:linear-gradient(135deg,#30d158,#1a9e3f);color:#fff">وضع LAN (8 أماكن)</button>
+        <button class="btn btn-sm" id="btn-respawn-split" style="background:linear-gradient(135deg,#ff2d55,#c9184a);color:#fff">وضع Split (مكانين)</button>
+      </div>
+      <div class="respawn-choice-hint" id="respawn-mode-hint">اختر الوضع ثم اضغط على الأرض لوضع النقاط</div>
+      <button class="btn btn-sm btn-ghost" id="btn-respawn-done" style="margin-top:8px">إنهاء التحديد</button>
     </div>
     <div class="level-panel">
       <div class="level-panel-header"><span>اللفلز</span><button class="btn btn-sm btn-primary" id="btn-new-level">+ جديد</button></div>

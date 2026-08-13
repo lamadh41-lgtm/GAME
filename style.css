@@ -757,3 +757,81 @@ body {
   background: rgba(0,212,255,0.2);
   border-color: #00d4ff;
 }
+
+/* Respawn choice panel */
+.respawn-choice-panel {
+  position: absolute;
+  top: 70px;
+  left: 50%;
+  transform: translateX(-50%);
+  z-index: 200;
+  background: rgba(12, 16, 28, 0.96);
+  border: 1px solid rgba(0, 212, 255, 0.3);
+  border-radius: 14px;
+  padding: 14px 18px;
+  box-shadow: 0 12px 40px rgba(0, 0, 0, 0.55);
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 10px;
+  min-width: 280px;
+}
+.respawn-choice-panel.hidden { display: none !important; }
+.respawn-choice-title {
+  color: #e2e8f0;
+  font-weight: 700;
+  font-size: 0.95rem;
+}
+.respawn-choice-btns {
+  display: flex;
+  gap: 10px;
+  flex-wrap: wrap;
+  justify-content: center;
+}
+.respawn-choice-hint {
+  color: #8e9aaf;
+  font-size: 0.8rem;
+  text-align: center;
+}
+
+/* Kick button in lobby */
+.btn-kick {
+  margin-right: auto;
+  padding: 6px 12px;
+  font-size: 0.75rem;
+  border-radius: 8px;
+  border: 1px solid rgba(255, 45, 85, 0.5);
+  background: rgba(255, 45, 85, 0.15);
+  color: #ff6b8a;
+  cursor: pointer;
+  font-family: inherit;
+  font-weight: 700;
+  transition: all 0.15s;
+}
+.btn-kick:hover {
+  background: rgba(255, 45, 85, 0.35);
+  color: #fff;
+  border-color: #ff2d55;
+}
+.player-card {
+  position: relative;
+}
+
+/* Online lobby — panel on the side so 3D characters show behind */
+#lobby-screen.online-lobby {
+  background: transparent;
+  pointer-events: none;
+}
+#lobby-screen.online-lobby .lobby-container {
+  pointer-events: auto;
+  margin-right: auto;
+  margin-left: 24px;
+  max-width: 420px;
+  max-height: 92vh;
+  overflow-y: auto;
+  background: linear-gradient(145deg, rgba(10,14,24,0.88), rgba(8,12,22,0.92));
+  padding: 28px 24px;
+}
+#lobby-screen.online-lobby .custom-panel {
+  text-align: right;
+}
