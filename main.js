@@ -21,6 +21,11 @@
     remoteMeshes: {}, // netId -> THREE.Group
     maxNetPlayers: 8,
     netPoseTimer: 0,
+    lanIp: null,
+    lanPort: 27100,
+    lanSince: 0,
+    lanPollTimer: null,
+    useLan: false,
     paused: false,
     pauseSide: 'full', // full | left | right
     volume: 0.8,
@@ -47,9 +52,9 @@
 
   const players = [
     { id: 0, group: null, yaw: 0, velocity: new THREE.Vector3(), direction: new THREE.Vector3(), canJump: true, camera: null,
-      settings: { sens: 5, camDist: 5.8, camHeight: 2.4, camSide: 0 } },
+      settings: { sens: 5, camDist: 5.8, camHeight: 2.4, camSide: 0 }, vehicle: null, vehicleSeat: null },
     { id: 1, group: null, yaw: Math.PI, velocity: new THREE.Vector3(), direction: new THREE.Vector3(), canJump: true, camera: null,
-      settings: { sens: 5, camDist: 5.8, camHeight: 2.4, camSide: 0 } }
+      settings: { sens: 5, camDist: 5.8, camHeight: 2.4, camSide: 0 }, vehicle: null, vehicleSeat: null }
   ];
   // pauseOwner: which player opened the menu (0=keyboard, 1=gamepad) — null when closed
   state.pauseOwner = null;
@@ -930,6 +935,96 @@
     player.camera.position.lerp(target.clone().add(offset), 0.15);
     player.camera.lookAt(target);
   }
+
+  function findNearestVehicle(player, maxDist) {
+    maxDist = maxDist || 3.5;
+    var best = null, bestD = maxDist * maxDist;
+    var px = player.group.position.x, pz = player.group.position.z;
+    for (var i = 0; i < state.buildObjects.length; i++) {
+      var o = state.buildObjects[i];
+      if (!o || !o.userData || !o.userData.isVehicle) continue;
+      // occupied by someone else?
+      if (o.userData.drivenBy != null && o.userData.drivenBy !== player.id) continue;
+      var dx = o.position.x - px, dz = o.position.z - pz;
+      var d = dx * dx + dz * dz;
+      if (d < bestD) { bestD = d; best = o; }
+    }
+    return best;
+  }
+
+  function enterVehicle(player, vehicle) {
+    if (!player || !vehicle) return;
+    player.vehicle = vehicle;
+    vehicle.userData.drivenBy = player.id;
+    player.yaw = vehicle.rotation.y;
+    if (player.group) player.group.visible = true;
+    toast('ركبت العربة — E للنزول', 'info');
+  }
+
+  function exitVehicle(player) {
+    if (!player || !player.vehicle) return;
+    var v = player.vehicle;
+    v.userData.drivenBy = null;
+    player.vehicle = null;
+    if (player.group) {
+      player.group.position.x = v.position.x + Math.sin(player.yaw) * 2;
+      player.group.position.z = v.position.z + Math.cos(player.yaw) * 2;
+      player.group.position.y = 0;
+    }
+    toast('نزلت من العربة', 'info');
+  }
+
+  function tryToggleVehicle(player) {
+    if (!player || !player.group) return;
+    if (player.vehicle) exitVehicle(player);
+    else {
+      var v = findNearestVehicle(player);
+      if (v) enterVehicle(player, v);
+      else toast('مفيش عربية قريبة', 'info');
+    }
+  }
+
+  // Solid collision vs build objects (and other players)
+  function playerCollides(player) {
+    if (!player || !player.group) return false;
+    var x = player.group.position.x;
+    var y = player.group.position.y;
+    var z = player.group.position.z;
+    var r = 0.38;
+    var h = 1.75;
+    var pBox = new THREE.Box3(
+      new THREE.Vector3(x - r, y + 0.05, z - r),
+      new THREE.Vector3(x + r, y + h, z + r)
+    );
+    var i, o, b;
+    for (i = 0; i < state.buildObjects.length; i++) {
+      o = state.buildObjects[i];
+      if (!o || !o.visible) continue;
+      if (o.userData && o.userData.noCollision) continue;
+      b = new THREE.Box3().setFromObject(o);
+      // ignore ultra-flat ground-like if height almost 0 at world y0 - still collide walls/buildings
+      if (b.isEmpty()) continue;
+      if (pBox.intersectsBox(b)) return true;
+    }
+    // other local player (split)
+    for (i = 0; i < players.length; i++) {
+      if (!players[i] || players[i] === player || !players[i].group) continue;
+      var ox = players[i].group.position.x, oz = players[i].group.position.z;
+      var dx = x - ox, dz = z - oz;
+      if (dx * dx + dz * dz < (r * 2) * (r * 2)) return true;
+    }
+    // remote net players
+    var ids = Object.keys(state.remoteMeshes || {});
+    for (i = 0; i < ids.length; i++) {
+      var m = state.remoteMeshes[ids[i]];
+      if (!m) continue;
+      var rx = m.position.x, rz = m.position.z;
+      var rdx = x - rx, rdz = z - rz;
+      if (rdx * rdx + rdz * rdz < (r * 2) * (r * 2)) return true;
+    }
+    return false;
+  }
+
   function updatePlayerMovement(player, delta, input) {
     if (!player.group) return;
     // Script can lock player input or force movement
@@ -952,6 +1047,42 @@
         lookX: fi.lookX != null ? fi.lookX : input.lookX
       };
     }
+    // Driving a vehicle
+    if (player.vehicle) {
+      var v = player.vehicle;
+      var vSpeed = input.run ? 14 : 8;
+      if (input.lookX !== undefined) player.yaw -= input.lookX * 0.04;
+      v.rotation.y = player.yaw;
+      var vfX = -Math.sin(player.yaw), vfZ = -Math.cos(player.yaw);
+      var vm = 0, vz = 0;
+      if (input.up) { vm += vfX; vz += vfZ; }
+      if (input.down) { vm -= vfX; vz -= vfZ; }
+      var vlen = Math.sqrt(vm * vm + vz * vz);
+      if (vlen > 0.001) {
+        vm /= vlen; vz /= vlen;
+        var oldvx = v.position.x, oldvz = v.position.z;
+        v.position.x += vm * vSpeed * delta;
+        v.position.z += vz * vSpeed * delta;
+        // simple vehicle collision: if player would collide, revert (use vehicle center)
+        var saved = { x: player.group.position.x, z: player.group.position.z };
+        player.group.position.x = v.position.x;
+        player.group.position.z = v.position.z;
+        if (playerCollides(player)) {
+          v.position.x = oldvx;
+          v.position.z = oldvz;
+        }
+        player.group.position.x = v.position.x;
+        player.group.position.z = v.position.z;
+      }
+      // seat player on vehicle
+      player.group.position.x = v.position.x;
+      player.group.position.y = v.position.y + 0.9;
+      player.group.position.z = v.position.z;
+      player.group.rotation.y = player.yaw + Math.PI;
+      player.velocity.y = 0;
+      return;
+    }
+
     var speed = input.run ? 7.5 : 4.2;
     if (input.lookX !== undefined) player.yaw -= input.lookX * 0.04;
 
@@ -975,8 +1106,14 @@
     var len = Math.sqrt(mx * mx + mz * mz);
     if (len > 0.001) {
       mx /= len; mz /= len;
-      player.group.position.x += mx * speed * delta;
-      player.group.position.z += mz * speed * delta;
+      var step = speed * delta;
+      var oldX = player.group.position.x;
+      var oldZ = player.group.position.z;
+      // Move X then Z separately so you slide along walls (solid bodies)
+      player.group.position.x = oldX + mx * step;
+      if (playerCollides(player)) player.group.position.x = oldX;
+      player.group.position.z = oldZ + mz * step;
+      if (playerCollides(player)) player.group.position.z = oldZ;
       ud.walkCycle += delta * speed * 3.2;
       var swing = Math.sin(ud.walkCycle) * 0.55;
       ud.leftArm.rotation.x = swing; ud.rightArm.rotation.x = -swing;
@@ -2118,7 +2255,9 @@
 
     if (state.playType === 'online' && state.isHost) {
       var levelName = (levelId && state.levels[levelId]) ? state.levels[levelId].name : '';
-      broadcastToAll({ type: 'start', levelId: levelId, levelName: levelName, roster: state.netRoster });
+      var startMsg = { type: 'start', levelId: levelId, levelName: levelName, roster: state.netRoster };
+      if (state.useLan) lanSend(startMsg);
+      else broadcastToAll(startMsg);
     }
     if (levelId) {
       setTimeout(function () { if (typeof runLevelScripts === 'function') runLevelScripts(levelId); }, 100);
@@ -2129,6 +2268,9 @@
   // ===== INPUT =====
   window.addEventListener('keydown', function (e) {
     state.keys[e.code] = true;
+    if (e.code === 'KeyE' && state.mode === 'play') {
+      tryToggleVehicle(players[0]);
+    }
     if (e.code === 'Escape') {
       if (state.mode === 'build') {
         // save and go menu
@@ -2570,6 +2712,13 @@
       if (el) el.onchange = function () {
         var idx = parseInt(document.getElementById('custom-player-select').value) || 0;
         readCustomFromUI(idx);
+        // sync clothes to other players
+        if (state.playType === 'online' && state.myNetId && typeof playerCustom !== 'undefined') {
+          var msg = { type: 'custom', id: state.myNetId, custom: playerCustom[idx] };
+          if (state.useLan) lanSend(msg);
+          else if (state.isHost) broadcastToAll(msg);
+          else if (state.connection) try { state.connection.send(msg); } catch (e) {}
+        }
       };
     });
     applyCustomToUI(0);
@@ -2588,11 +2737,14 @@
   document.getElementById('btn-start-game').onclick = startGame;
   document.getElementById('btn-leave-lobby').onclick = function () {
     if (state.playType === 'online' && state.myNetId) {
-      broadcastToAll({ type: 'leave', id: state.myNetId });
+      if (state.useLan) lanSend({ type: 'leave', id: state.myNetId });
+      else broadcastToAll({ type: 'leave', id: state.myNetId });
     }
+    stopLanPoll();
     if (state.peer) try { state.peer.destroy(); } catch (e) {}
     state.peer = null; state.connection = null; state.connections = [];
     state.player2Joined = false; state.netRoster = []; state.myNetId = null;
+    state.useLan = false;
     clearRemoteMeshes();
     showScreen('menu');
   };
@@ -2676,10 +2828,11 @@
       if (state.paused && state.pauseOwner === 1) {
         handleGamepadMenuNav(gpInput, rawDelta);
       }
-      // Network pose sync (~20Hz)
+      // Network pose sync (~30Hz) + smooth remote players
       if (state.playType === 'online') {
+        updateRemoteMeshes(delta);
         state.netPoseTimer = (state.netPoseTimer || 0) + rawDelta;
-        if (state.netPoseTimer >= 0.05) {
+        if (state.netPoseTimer >= 0.033) {
           state.netPoseTimer = 0;
           sendMyPose();
         }
@@ -2783,6 +2936,57 @@
     if (ls) ls.classList.add('hidden');
   }
 
+  
+  // ===== Pure LAN bus (no internet) via lan_host.py on host machine =====
+  function lanBaseUrl() {
+    var ip = (state.lanIp || '127.0.0.1').trim();
+    return 'http://' + ip + ':' + (state.lanPort || 27100);
+  }
+
+  function stopLanPoll() {
+    if (state.lanPollTimer) {
+      clearInterval(state.lanPollTimer);
+      state.lanPollTimer = null;
+    }
+  }
+
+  function lanSend(data) {
+    if (!state.useLan || !state.roomCode) return;
+    fetch(lanBaseUrl() + '/send', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ room: state.roomCode, data: data })
+    }).catch(function () {});
+  }
+
+  function lanPollOnce() {
+    if (!state.useLan || !state.roomCode) return;
+    var url = lanBaseUrl() + '/poll?room=' + encodeURIComponent(state.roomCode) + '&since=' + (state.lanSince || 0);
+    fetch(url).then(function (r) { return r.json(); }).then(function (j) {
+      if (!j || !j.messages) return;
+      j.messages.forEach(function (m) {
+        if (m.id > state.lanSince) state.lanSince = m.id;
+        if (!m.data) return;
+        // ignore own poses for apply but host still relays conceptually (everyone polls)
+        handlePeerData(m.data, !!state.isHost, null);
+      });
+    }).catch(function () {});
+  }
+
+  function startLanPoll() {
+    stopLanPoll();
+    state.lanSince = 0;
+    lanPollOnce();
+    state.lanPollTimer = setInterval(lanPollOnce, 50);
+  }
+
+  function lanCheckHost(ip, cb) {
+    var url = 'http://' + ip + ':' + (state.lanPort || 27100) + '/status';
+    fetch(url, { cache: 'no-cache' }).then(function (r) { return r.json(); }).then(function (j) {
+      cb(!!(j && j.ok), j);
+    }).catch(function () { cb(false, null); });
+  }
+
   function broadcastToAll(msg, exceptConn) {
     if (state.isHost) {
       (state.connections || []).forEach(function (c) {
@@ -2853,22 +3057,112 @@
     if (!d || d.id === state.myNetId) return;
     var mesh = ensureRemoteMesh(d.id, d.custom);
     if (!mesh) return;
-    mesh.position.set(d.x, d.y || 0, d.z);
-    mesh.rotation.y = (d.yaw || 0) + Math.PI;
+    // refresh clothes if custom changed
+    if (d.custom && mesh.userData._customKey !== JSON.stringify(d.custom)) {
+      var pos = mesh.position.clone();
+      var rot = mesh.rotation.y;
+      scene.remove(mesh);
+      var neu = createCharacterMesh(0xb91c1c, 0xe0ac69, d.custom);
+      neu.position.copy(pos);
+      neu.rotation.y = rot;
+      neu.userData._customKey = JSON.stringify(d.custom);
+      scene.add(neu);
+      state.remoteMeshes[d.id] = neu;
+      mesh = neu;
+    }
+    if (!state.remoteTargets) state.remoteTargets = {};
+    state.remoteTargets[d.id] = {
+      x: d.x, y: d.y || 0, z: d.z,
+      yaw: (d.yaw || 0) + Math.PI,
+      moving: !!d.moving,
+      inVehicle: !!d.inVehicle,
+      vehicleName: d.vehicleName || null,
+      vehicleX: d.vehicleX, vehicleY: d.vehicleY, vehicleZ: d.vehicleZ,
+      vehicleYaw: d.vehicleYaw
+    };
+    // sync vehicle transform so other player sees the car move
+    if (d.inVehicle && d.vehicleName) {
+      for (var i = 0; i < state.buildObjects.length; i++) {
+        var o = state.buildObjects[i];
+        if (o && o.userData && o.userData.instanceName === d.vehicleName) {
+          if (d.vehicleX != null) {
+            o.position.x = d.vehicleX;
+            o.position.y = d.vehicleY || 0;
+            o.position.z = d.vehicleZ;
+          }
+          if (d.vehicleYaw != null) o.rotation.y = d.vehicleYaw;
+          break;
+        }
+      }
+    }
+  }
+
+  function updateRemoteMeshes(delta) {
+    if (!state.remoteTargets) return;
+    var ids = Object.keys(state.remoteTargets);
+    for (var i = 0; i < ids.length; i++) {
+      var id = ids[i];
+      var mesh = state.remoteMeshes[id];
+      var t = state.remoteTargets[id];
+      if (!mesh || !t) continue;
+      // smooth follow — reduces stutter on LAN/net
+      var lerp = Math.min(1, 18 * delta);
+      mesh.position.x += (t.x - mesh.position.x) * lerp;
+      mesh.position.y += (t.y - mesh.position.y) * lerp;
+      mesh.position.z += (t.z - mesh.position.z) * lerp;
+      var cy = mesh.rotation.y;
+      var ty = t.yaw;
+      var dy = ty - cy;
+      while (dy > Math.PI) dy -= Math.PI * 2;
+      while (dy < -Math.PI) dy += Math.PI * 2;
+      mesh.rotation.y = cy + dy * lerp;
+      // walk anim if moving
+      if (t.moving && mesh.userData && mesh.userData.leftArm) {
+        mesh.userData.walkCycle = (mesh.userData.walkCycle || 0) + delta * 10;
+        var s = Math.sin(mesh.userData.walkCycle) * 0.5;
+        mesh.userData.leftArm.rotation.x = s;
+        mesh.userData.rightArm.rotation.x = -s;
+        if (mesh.userData.leftLeg) mesh.userData.leftLeg.rotation.x = -s;
+        if (mesh.userData.rightLeg) mesh.userData.rightLeg.rotation.x = s;
+      }
+    }
   }
 
   function sendMyPose() {
     var p = players[0];
     if (!p || !p.group) return;
+    var moving = false;
+    if (p.group.userData && p.group.userData._lastPos) {
+      var lp = p.group.userData._lastPos;
+      var dx = p.group.position.x - lp.x, dz = p.group.position.z - lp.z;
+      moving = (dx * dx + dz * dz) > 0.00005;
+    }
+    p.group.userData._lastPos = p.group.position.clone();
+    var custom = null;
+    try {
+      custom = state.isHost
+        ? (typeof playerCustom !== 'undefined' ? playerCustom[0] : null)
+        : (typeof playerCustom !== 'undefined' ? (playerCustom[1] || playerCustom[0]) : null);
+    } catch (e) {}
     var msg = {
       type: 'pose',
       id: state.myNetId,
       x: p.group.position.x,
       y: p.group.position.y,
       z: p.group.position.z,
-      yaw: p.yaw
+      yaw: p.yaw,
+      moving: moving,
+      custom: custom,
+      inVehicle: !!p.vehicle,
+      vehicleName: (p.vehicle && p.vehicle.userData) ? (p.vehicle.userData.instanceName || null) : null,
+      vehicleX: p.vehicle ? p.vehicle.position.x : null,
+      vehicleY: p.vehicle ? p.vehicle.position.y : null,
+      vehicleZ: p.vehicle ? p.vehicle.position.z : null,
+      vehicleYaw: p.vehicle ? p.vehicle.rotation.y : null
     };
-    if (state.isHost) {
+    if (state.useLan) {
+      lanSend(msg);
+    } else if (state.isHost) {
       broadcastToAll(msg);
     } else if (state.connection) {
       try { state.connection.send(msg); } catch (e) {}
@@ -2879,18 +3173,27 @@
     if (!d || !d.type) return;
     // NO levels / story data transfer — each device uses its own local comprehensive ZIP
     if (d.type === 'join') {
-      if (isHostSide && fromConn) {
-        var newId = 'p_' + Date.now().toString(36) + Math.random().toString(36).slice(2, 5);
-        fromConn._netId = newId;
-        fromConn._custom = d.custom || null;
+      if (state.isHost) {
+        var newId = d.clientId || ('p_' + Date.now().toString(36) + Math.random().toString(36).slice(2, 5));
+        if (fromConn) {
+          fromConn._netId = newId;
+          fromConn._custom = d.custom || null;
+        }
         if (!state.netRoster) state.netRoster = [];
-        // ensure host in roster
         if (!state.netRoster.some(function (r) { return r.isHost; })) {
           state.netRoster.unshift({ id: state.myNetId || 'host', name: 'القائد', isHost: true });
         }
+        // avoid duplicate join
+        if (state.netRoster.some(function (r) { return r.id === newId; })) {
+          if (state.useLan) lanSend({ type: 'welcome', yourId: newId, roster: state.netRoster });
+          return;
+        }
         if (state.netRoster.length >= state.maxNetPlayers) {
-          try { fromConn.send({ type: 'full' }); } catch (e) {}
-          try { fromConn.close(); } catch (e) {}
+          if (fromConn) {
+            try { fromConn.send({ type: 'full' }); } catch (e) {}
+            try { fromConn.close(); } catch (e) {}
+          }
+          if (state.useLan) lanSend({ type: 'full' });
           toast('اللوبية ممتلئة (حد أقصى ' + state.maxNetPlayers + ')', 'error');
           return;
         }
@@ -2901,10 +3204,15 @@
           custom: d.custom
         });
         state.player2Joined = true;
-        try {
-          fromConn.send({ type: 'welcome', yourId: newId, roster: state.netRoster });
-        } catch (e) {}
-        broadcastToAll({ type: 'roster', roster: state.netRoster }, fromConn);
+        var welcome = { type: 'welcome', yourId: newId, roster: state.netRoster };
+        var rosterMsg = { type: 'roster', roster: state.netRoster };
+        if (state.useLan) {
+          lanSend(welcome);
+          lanSend(rosterMsg);
+        } else {
+          if (fromConn) try { fromConn.send(welcome); } catch (e) {}
+          broadcastToAll(rosterMsg, fromConn);
+        }
         renderNetLobbyList();
         toast('لاعب انضم! (' + state.netRoster.length + '/' + state.maxNetPlayers + ')', 'success');
         document.getElementById('gamepad-hint').textContent =
@@ -2926,12 +3234,32 @@
     if (d.type === 'full') {
       toast('اللوبية ممتلئة', 'error');
     }
+    if (d.type === 'custom') {
+      if (d.id && d.custom) {
+        applyNetPose({ id: d.id, x: 0, y: 0, z: 0, yaw: 0, custom: d.custom, moving: false });
+        // if mesh exists only update clothes
+        var mesh = state.remoteMeshes[d.id];
+        if (mesh && d.custom) {
+          var pos = mesh.position.clone();
+          var rotY = mesh.rotation.y;
+          scene.remove(mesh);
+          var neu = createCharacterMesh(0xb91c1c, 0xe0ac69, d.custom);
+          neu.position.copy(pos);
+          neu.rotation.y = rotY;
+          neu.userData._customKey = JSON.stringify(d.custom);
+          scene.add(neu);
+          state.remoteMeshes[d.id] = neu;
+        }
+      }
+      if (isHostSide && !state.useLan) broadcastToAll(d, fromConn);
+    }
     if (d.type === 'pose') {
       applyNetPose(d);
-      // host relays to others
-      if (isHostSide) broadcastToAll(d, fromConn);
+      // PeerJS: host relays. LAN: everyone already sees the bus — no relay
+      if (isHostSide && !state.useLan) broadcastToAll(d, fromConn);
     }
     if (d.type === 'start') {
+      if (state.mode === 'play') return; // already started (host)
       var levelId = d.levelId || '';
       if (levelId && !state.levels[levelId] && d.levelName) {
         Object.keys(state.levels).forEach(function (lid) {
@@ -3143,11 +3471,21 @@
       if (state.peer) { try { state.peer.destroy(); } catch (e) {} }
       var peerId = isHost ? ('sm_' + code) : undefined;
       showSyncLoading(isHost ? 'جاري فتح اللوبي...' : 'جاري الاتصال بالمضيف...');
-      state.peer = new Peer(peerId, { debug: 0 });
+      // PeerJS: signaling عبر الخدمة العامة، والبيانات P2P مباشرة (LAN/Radmin أفضل)
+      // من غير إنترنت للإشارة الاتصال قد يفشل — بعد الاتصال الحركة تفضل P2P
+      state.peer = new Peer(peerId, {
+        debug: 0,
+        config: {
+          iceServers: [
+            { urls: 'stun:stun.l.google.com:19302' },
+            { urls: 'stun:global.stun.twilio.com:3478' }
+          ]
+        }
+      });
       state.peer.on('open', function (id) {
         if (isHost) {
           hideSyncLoading();
-          toast('اللوبي جاهز: ' + code + ' — يمكن لعدة لاعبين الانضمام', 'success');
+          toast('اللوبي جاهز: ' + code + ' — اتصال مباشر بين الأجهزة', 'success');
         } else {
           var conn = state.peer.connect('sm_' + code, { reliable: true });
           state.connection = conn;
@@ -3203,7 +3541,7 @@
       state.peer.on('error', function (err) {
         console.warn(err);
         hideSyncLoading();
-        toast('خطأ شبكة — تأكد من الرمز وأن الجميع على نفس الشبكة', 'error');
+        toast('فشل الاتصال — تأكد من الرمز وأن الاتنين فاتحين اللعبة ومتصلين', 'error');
       });
     } catch (e) {
       hideSyncLoading();
@@ -3212,7 +3550,7 @@
     showScreen('lobby');
   }
 
-  // ===== Create / Join: رفع ملف ZIP من الجهاز =====
+  // ===== Create / Join: رفع ZIP + LAN بدون إنترنت =====
   var createZipReady = false;
   var joinZipReady = false;
   var createUploadInput = document.getElementById('create-upload-input');
@@ -3264,6 +3602,69 @@
     };
   }
 
+  function setupLanLobby(isHost, code, ip) {
+    state.playType = 'online';
+    state.useLan = true;
+    state.isHost = isHost;
+    state.roomCode = code;
+    state.lanIp = ip;
+    state.player2Joined = !isHost;
+    state.connections = [];
+    state.connection = null;
+    state.myNetId = isHost ? ('host_' + code) : ('p_' + Date.now().toString(36));
+    state.netRoster = isHost ? [{ id: state.myNetId, name: 'القائد', isHost: true }] : [];
+    clearRemoteMeshes();
+    stopLanPoll();
+
+    document.getElementById('lobby-title').textContent = isHost ? '⚔️ لوبي القائد (LAN)' : '⚔️ لوبي المنضم (LAN)';
+    document.getElementById('lobby-code-display').style.display = 'block';
+    document.getElementById('lobby-code-display').textContent = 'الرمز: ' + code + ' | IP: ' + ip;
+    document.getElementById('gamepad-hint').textContent = isHost
+      ? 'LAN جاهز — انتظر اللاعبين (شغّل lan_host.py)'
+      : 'جاري الانضمام عبر LAN...';
+
+    var levelBox = document.querySelector('.level-select-box');
+    var customSel = document.getElementById('custom-player-select');
+    if (!isHost) {
+      if (levelBox) levelBox.style.display = 'none';
+      if (customSel) {
+        customSel.innerHTML = '<option value="1">ملابسي فقط</option>';
+        customSel.value = '1';
+        customSel.disabled = true;
+      }
+    } else {
+      if (levelBox) levelBox.style.display = '';
+      if (customSel) {
+        customSel.disabled = false;
+        customSel.innerHTML = '<option value="0">اللاعب 1</option><option value="1">اللاعب 2</option>';
+      }
+      document.getElementById('btn-start-game').disabled = true;
+      document.getElementById('btn-start-game').textContent = 'انتظر لاعبين...';
+    }
+    renderNetLobbyList();
+    showScreen('lobby');
+    startLanPoll();
+
+    if (!isHost) {
+      // announce join on LAN bus
+      setTimeout(function () {
+        try { readCustomFromUI && readCustomFromUI(1); } catch (e) {}
+        lanSend({
+          type: 'join',
+          clientId: state.myNetId,
+          name: 'لاعب',
+          custom: (typeof playerCustom !== 'undefined' ? playerCustom[1] : null)
+        });
+        toast('انضممت عبر LAN', 'success');
+        document.getElementById('gamepad-hint').textContent = 'متصل عبر LAN — بانتظار القائد';
+        document.getElementById('btn-start-game').disabled = true;
+        document.getElementById('btn-start-game').textContent = 'في انتظار القائد...';
+      }, 200);
+    } else {
+      toast('لوبي LAN جاهز — من غير إنترنت', 'success');
+    }
+  }
+
   var btnDoCreate = document.getElementById('btn-do-create');
   if (btnDoCreate) btnDoCreate.onclick = function () {
     var code = (document.getElementById('create-code-input').value || '').trim().toLowerCase().replace(/\s+/g, '');
@@ -3273,6 +3674,7 @@
       if (createUploadInput) createUploadInput.click();
       return;
     }
+    state.useLan = false;
     setupOnlineLobby(true, code);
   };
 
@@ -3285,6 +3687,7 @@
       if (joinUploadInput) joinUploadInput.click();
       return;
     }
+    state.useLan = false;
     setupOnlineLobby(false, code);
   };
 
