@@ -7,6 +7,7 @@
   <link rel="stylesheet" href="style.css" />
 </head>
 <body>
+  <button id="btn-fullscreen" type="button" title="ملء الشاشة" aria-label="Fullscreen">⛶</button>
   <div id="loading-screen">
     <div class="loader">
       <div class="spinner"></div>
@@ -75,10 +76,14 @@
   <div id="create-room" class="screen hidden">
     <div class="menu-container">
       <h2 style="margin-bottom:16px">إنشاء لوبي</h2>
-      <p style="color:#94a3b8;margin-bottom:12px;font-size:0.9rem">اكتب رمز اللوبي (أي كلمة أو أرقام)</p>
+      <p style="color:#94a3b8;margin-bottom:10px;font-size:0.9rem">① اكتب رمز اللوبي</p>
       <input type="text" id="create-code-input" class="room-input" placeholder="مثال: room123" maxlength="20" />
+      <p style="color:#a78bfa;margin:14px 0 8px;font-size:0.85rem">② ارفع ملف البيانات الشامل</p>
+      <input type="file" id="create-upload-input" accept=".zip,application/zip" class="hidden" />
+      <button class="btn btn-accent" id="btn-create-pick-zip" style="width:100%;margin-bottom:8px">📁 رفع الملف الشامل</button>
+      <p id="create-pack-status" style="color:#94a3b8;font-size:0.8rem;min-height:1.2em"></p>
       <div class="menu-buttons" style="margin-top:16px">
-        <button class="btn btn-primary" id="btn-do-create">إنشاء</button>
+        <button class="btn btn-primary" id="btn-do-create">تأكيد وإنشاء اللوبي</button>
         <button class="btn btn-ghost" id="btn-create-back">رجوع</button>
       </div>
     </div>
@@ -88,16 +93,17 @@
   <div id="join-room" class="screen hidden">
     <div class="menu-container">
       <h2 style="margin-bottom:16px">انضمام للوبي</h2>
-      <p style="color:#94a3b8;margin-bottom:12px;font-size:0.9rem">أدخل رمز الروم ثم ارفع ملف البيانات الشامل المحلي (نفس ملف المضيف)</p>
+      <p style="color:#94a3b8;margin-bottom:10px;font-size:0.9rem">① اكتب رمز اللوبي</p>
       <input type="text" id="join-code-input" class="room-input" placeholder="رمز اللوبي" maxlength="20" />
-      <p style="color:#a78bfa;margin:14px 0 8px;font-size:0.85rem">① اختر ملف ZIP الشامل من جهازك</p>
-      <input type="file" id="join-upload-input" accept=".zip" style="margin-bottom:10px;width:100%;color:#e2e8f0" />
+      <p style="color:#a78bfa;margin:14px 0 8px;font-size:0.85rem">② ارفع نفس ملف البيانات الشامل (زي القائد)</p>
+      <input type="file" id="join-upload-input" accept=".zip,application/zip" class="hidden" />
+      <button class="btn btn-accent" id="btn-join-pick-zip" style="width:100%;margin-bottom:8px">📁 رفع الملف الشامل</button>
       <p id="join-upload-status" style="color:#94a3b8;font-size:0.8rem;min-height:1.2em"></p>
       <div class="menu-buttons" style="margin-top:16px">
-        <button class="btn btn-primary" id="btn-do-join">انضمام للوبي</button>
+        <button class="btn btn-primary" id="btn-do-join">تأكيد والانضمام</button>
         <button class="btn btn-ghost" id="btn-join-back">رجوع</button>
       </div>
-      <p style="color:#64748b;margin-top:14px;font-size:0.75rem;text-align:center">لا يتم نقل بيانات الستوري عبر الشبكة — كل جهاز يعتمد على ملفه المحلي</p>
+      <p style="color:#64748b;margin-top:14px;font-size:0.75rem;text-align:center">ارفع الملف من جهازك ثم أكّد — من غير رفع مش هيدخل اللوبي</p>
     </div>
   </div>
 

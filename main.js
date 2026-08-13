@@ -1283,11 +1283,9 @@
   }
 
   // ===== ZIP UPLOAD (comprehensive) =====
-  function uploadComprehensiveZip(file, onDone) {
+  function processZipArrayBuffer(arrayBuffer, onDone) {
     if (typeof JSZip === 'undefined') { toast('JSZip غير متوفر', 'error'); if (onDone) onDone(false, 0); return; }
-    var reader = new FileReader();
-    reader.onload = function (e) {
-      JSZip.loadAsync(e.target.result).then(function (zip) {
+    JSZip.loadAsync(arrayBuffer).then(function (zip) {
         var promises = [];
         var levelMap = {}; // folderName -> { id, name, objects, scripts, sounds }
 
@@ -1376,13 +1374,67 @@
           toast('خطأ في معالجة البيانات', 'error');
           if (onDone) onDone(false, 0);
         });
-      }).catch(function (err) {
-        console.error(err);
-        toast('خطأ في قراءة ملف ZIP', 'error');
-        if (onDone) onDone(false, 0);
-      });
-    };
+    }).catch(function (err) {
+      console.error(err);
+      toast('خطأ في قراءة ملف ZIP', 'error');
+      if (onDone) onDone(false, 0);
+    });
+  }
+
+  function uploadComprehensiveZip(file, onDone) {
+    if (!file) { if (onDone) onDone(false, 0); return; }
+    var reader = new FileReader();
+    reader.onload = function (e) { processZipArrayBuffer(e.target.result, onDone); };
+    reader.onerror = function () { toast('فشل قراءة الملف', 'error'); if (onDone) onDone(false, 0); };
     reader.readAsArrayBuffer(file);
+  }
+
+  // Load pack ZIP from same folder as index.html (works local server + GitHub Pages)
+  // User types name without .zip — we try name.zip then name
+  function normalizePackName(name) {
+    name = (name || '').trim();
+    if (!name) return '';
+    name = name.replace(/\\/g, '/');
+    // strip path, keep basename
+    if (name.indexOf('/') !== -1) name = name.split('/').pop();
+    if (/\.zip$/i.test(name)) name = name.replace(/\.zip$/i, '');
+    return name;
+  }
+
+  function loadPackByName(packName, onDone) {
+    var base = normalizePackName(packName);
+    if (!base) {
+      toast('اكتب اسم النسخة', 'error');
+      if (onDone) onDone(false, 0);
+      return;
+    }
+    // Relative to the page URL (GitHub Pages friendly)
+    var candidates = [
+      base + '.zip',
+      base,
+      encodeURIComponent(base) + '.zip',
+      encodeURIComponent(base)
+    ];
+    // unique
+    candidates = candidates.filter(function (v, i, a) { return a.indexOf(v) === i; });
+
+    function tryNext(i) {
+      if (i >= candidates.length) {
+        toast('لم يُعثر على الملف: ' + base + '.zip بجانب index', 'error');
+        if (onDone) onDone(false, 0);
+        return;
+      }
+      var url = candidates[i];
+      fetch(url, { cache: 'no-cache' }).then(function (res) {
+        if (!res.ok) throw new Error('HTTP ' + res.status);
+        return res.arrayBuffer();
+      }).then(function (buf) {
+        processZipArrayBuffer(buf, onDone);
+      }).catch(function () {
+        tryNext(i + 1);
+      });
+    }
+    tryNext(0);
   }
 
   // ===== BUILD =====
@@ -2526,7 +2578,13 @@
 
   // ===== UI =====
   var _bgl = document.getElementById('btn-go-lobby'); if (_bgl) _bgl.onclick = function () { showUI('story-choice'); };
-  document.getElementById('btn-build-mode').onclick = function () { showScreen('build'); };
+  document.getElementById('btn-build-mode').onclick = function () {
+    if (state.playType === 'online' && !state.isHost && state.peer) {
+      toast('المنضم يقدر يعدل ملابسه فقط — البناء للقائد/وضع المطور المنفصل', 'error');
+      return;
+    }
+    showScreen('build');
+  };
   document.getElementById('btn-start-game').onclick = startGame;
   document.getElementById('btn-leave-lobby').onclick = function () {
     if (state.playType === 'online' && state.myNetId) {
@@ -3058,6 +3116,28 @@
       document.getElementById('btn-start-game').textContent = 'في انتظار القائد...';
     }
     renderNetLobbyList();
+    // Joiner: clothes only — no level control
+    var levelBox = document.querySelector('.level-select-box');
+    var customSel = document.getElementById('custom-player-select');
+    if (!isHost) {
+      if (levelBox) levelBox.style.display = 'none';
+      if (customSel) {
+        customSel.innerHTML = '<option value="1">ملابسي فقط</option>';
+        customSel.value = '1';
+        customSel.disabled = true;
+      }
+      var hint = document.getElementById('gamepad-hint');
+      if (hint && !isHost) {
+        // will be overwritten on connect; base message:
+      }
+      toast('المنضم يعدّل ملابسه فقط — اختيار اللفل للقائد', 'info');
+    } else {
+      if (levelBox) levelBox.style.display = '';
+      if (customSel) {
+        customSel.disabled = false;
+        customSel.innerHTML = '<option value="0">اللاعب 1</option><option value="1">اللاعب 2</option>';
+      }
+    }
 
     try {
       if (state.peer) { try { state.peer.destroy(); } catch (e) {} }
@@ -3132,45 +3212,97 @@
     showScreen('lobby');
   }
 
-  var btnDoCreate = document.getElementById('btn-do-create');
-  if (btnDoCreate) btnDoCreate.onclick = function () {
-    var code = (document.getElementById('create-code-input').value || '').trim().toLowerCase().replace(/\s+/g, '');
-    if (!code || code.length < 2) { toast('اكتب رمز صالح', 'error'); return; }
-    setupOnlineLobby(true, code);
-  };
-
+  // ===== Create / Join: رفع ملف ZIP من الجهاز =====
+  var createZipReady = false;
   var joinZipReady = false;
+  var createUploadInput = document.getElementById('create-upload-input');
   var joinUploadInput = document.getElementById('join-upload-input');
+  var createPackStatus = document.getElementById('create-pack-status');
   var joinUploadStatus = document.getElementById('join-upload-status');
-  if (joinUploadInput) {
-    joinUploadInput.onchange = function (e) {
+
+  var btnCreatePick = document.getElementById('btn-create-pick-zip');
+  if (btnCreatePick && createUploadInput) {
+    btnCreatePick.onclick = function () { createUploadInput.click(); };
+  }
+  if (createUploadInput) {
+    createUploadInput.onchange = function (e) {
       var f = e.target.files && e.target.files[0];
-      if (!f) { joinZipReady = false; if (joinUploadStatus) joinUploadStatus.textContent = ''; return; }
-      if (joinUploadStatus) joinUploadStatus.textContent = 'جاري تحميل الملف...';
+      if (!f) { createZipReady = false; if (createPackStatus) createPackStatus.textContent = ''; return; }
+      if (createPackStatus) createPackStatus.textContent = 'جاري قراءة «' + f.name + '» ...';
       uploadComprehensiveZip(f, function (ok, count) {
+        createZipReady = !!ok;
         if (ok) {
-          joinZipReady = true;
-          if (joinUploadStatus) joinUploadStatus.textContent = '✓ تم تحميل ' + (count || '') + ' لفل — جاهز للانضمام';
-          toast('البيانات المحلية جاهزة', 'success');
+          if (createPackStatus) createPackStatus.textContent = '✓ تم التعرف على الملف — ' + (count || 0) + ' لفل';
+          toast('تم التعرف على الملف', 'success');
         } else {
-          joinZipReady = false;
-          if (joinUploadStatus) joinUploadStatus.textContent = 'فشل التحميل — جرّب ملف ZIP آخر';
+          if (createPackStatus) createPackStatus.textContent = 'فشل قراءة الملف';
+          toast('لم يتم التعرف على الملف', 'error');
         }
       });
     };
   }
+
+  var btnJoinPick = document.getElementById('btn-join-pick-zip');
+  if (btnJoinPick && joinUploadInput) {
+    btnJoinPick.onclick = function () { joinUploadInput.click(); };
+  }
+  if (joinUploadInput) {
+    joinUploadInput.onchange = function (e) {
+      var f = e.target.files && e.target.files[0];
+      if (!f) { joinZipReady = false; if (joinUploadStatus) joinUploadStatus.textContent = ''; return; }
+      if (joinUploadStatus) joinUploadStatus.textContent = 'جاري قراءة «' + f.name + '» ...';
+      uploadComprehensiveZip(f, function (ok, count) {
+        joinZipReady = !!ok;
+        if (ok) {
+          if (joinUploadStatus) joinUploadStatus.textContent = '✓ تم التعرف على الملف — ' + (count || 0) + ' لفل';
+          toast('تم التعرف على الملف', 'success');
+        } else {
+          if (joinUploadStatus) joinUploadStatus.textContent = 'فشل قراءة الملف';
+          toast('لم يتم التعرف على الملف', 'error');
+        }
+      });
+    };
+  }
+
+  var btnDoCreate = document.getElementById('btn-do-create');
+  if (btnDoCreate) btnDoCreate.onclick = function () {
+    var code = (document.getElementById('create-code-input').value || '').trim().toLowerCase().replace(/\s+/g, '');
+    if (!code || code.length < 2) { toast('اكتب رمز صالح', 'error'); return; }
+    if (!createZipReady) {
+      toast('ارفع الملف الشامل أولاً', 'error');
+      if (createUploadInput) createUploadInput.click();
+      return;
+    }
+    setupOnlineLobby(true, code);
+  };
 
   var btnDoJoin = document.getElementById('btn-do-join');
   if (btnDoJoin) btnDoJoin.onclick = function () {
     var code = (document.getElementById('join-code-input').value || '').trim().toLowerCase().replace(/\s+/g, '');
     if (!code || code.length < 2) { toast('اكتب رمز الروم', 'error'); return; }
     if (!joinZipReady) {
-      toast('ارفع ملف البيانات الشامل المحلي أولاً', 'error');
+      toast('ارفع الملف الشامل أولاً', 'error');
       if (joinUploadInput) joinUploadInput.click();
       return;
     }
     setupOnlineLobby(false, code);
   };
+
+  // Fullscreen button (any page)
+  var btnFs = document.getElementById('btn-fullscreen');
+  if (btnFs) {
+    btnFs.onclick = function () {
+      var doc = document;
+      if (!doc.fullscreenElement && !doc.webkitFullscreenElement) {
+        var el = doc.documentElement;
+        var req = el.requestFullscreen || el.webkitRequestFullscreen || el.msRequestFullscreen;
+        if (req) req.call(el);
+      } else {
+        var exit = doc.exitFullscreen || doc.webkitExitFullscreen || doc.msExitFullscreen;
+        if (exit) exit.call(doc);
+      }
+    };
+  }
 
   // Pause system — per-player in split screen
   var gpMenuFocus = 0; // index into focusable elements

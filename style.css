@@ -732,3 +732,28 @@ body {
 }
 .setting-row input[type="range"] { flex: 1; accent-color: var(--accent); }
 .remap-list { font-size: 0.82rem; color: var(--muted); line-height: 1.8; }
+
+/* Fullscreen toggle — always visible */
+#btn-fullscreen {
+  position: fixed;
+  top: 12px;
+  left: 12px;
+  z-index: 9999;
+  width: 42px;
+  height: 42px;
+  border-radius: 10px;
+  border: 1px solid rgba(0,212,255,0.35);
+  background: rgba(12,16,28,0.85);
+  color: #e2e8f0;
+  font-size: 1.25rem;
+  cursor: pointer;
+  backdrop-filter: blur(8px);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  transition: background .2s, border-color .2s;
+}
+#btn-fullscreen:hover {
+  background: rgba(0,212,255,0.2);
+  border-color: #00d4ff;
+}
