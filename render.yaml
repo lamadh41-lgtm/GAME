@@ -1,0 +1,10 @@
+services:
+  - type: web
+    name: story-mode
+    runtime: python
+    plan: free
+    buildCommand: "echo no-build"
+    startCommand: "python lan_host.py"
+    envVars:
+      - key: PYTHON_VERSION
+        value: "3.12.8"
