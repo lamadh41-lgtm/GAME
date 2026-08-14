@@ -2,9 +2,8 @@
 # -*- coding: utf-8 -*-
 """
 مضيف Story Mode — HTTP + WebSocket على نفس المنفذ.
-WebSocket (/ws) = تزامن فوري على LAN بدون polling.
-
-  python lan_host.py
+يدعم التشغيل المحلي (LAN) والتشغيل على الخوادم السحابية (Railway, Render, etc.)
+WebSocket (/ws) = تزامن فوري بدون polling.
 """
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from urllib.parse import urlparse, parse_qs, unquote
@@ -19,8 +18,11 @@ import base64
 import struct
 import select
 
-# Render / cloud يستخدم PORT، واللوكال يستخدم 27100
-PORT = int(os.environ.get('PORT') or os.environ.get('STORY_PORT') or '27100')
+# ✅ استخدام متغير البيئة PORT من Railway/Render أو المنفذ الافتراضي
+PORT = int(os.environ.get('PORT', 27100))
+# ✅ استخدام 0.0.0.0 للاستماع من أي جهاز (مطلوب للخوادم السحابية)
+HOST = os.environ.get('HOST', '0.0.0.0')
+
 ROOT = os.path.dirname(os.path.abspath(__file__))
 ROOMS = {}
 # room -> list of WsClient
@@ -110,7 +112,6 @@ def cleanup_rooms():
             dead.append(k)
     for k in dead:
         ROOMS.pop(k, None)
-        # close WS clients in dead room
         clients = WS_ROOMS.pop(k, [])
         for c in clients:
             try:
@@ -264,7 +265,6 @@ class WsClient(object):
         with self._wlock:
             if not self.alive:
                 return
-            # single frame text, unmasked (server→client)
             ln = len(data)
             if ln < 126:
                 hdr = struct.pack('!BB', 0x81, ln)
@@ -280,7 +280,6 @@ class WsClient(object):
     def close(self):
         self.alive = False
         try:
-            # close frame
             self.sock.sendall(b'\x88\x00')
         except Exception:
             pass
@@ -317,10 +316,8 @@ class WsClient(object):
     def loop(self):
         try:
             while self.alive:
-                # short select — respond fast, keep connection warm without long stalls
                 r, _, _ = select.select([self.sock], [], [], 8.0)
                 if not r:
-                    # idle websocket ping (opcode 0x9)
                     try:
                         with self._wlock:
                             self.sock.sendall(b'\x89\x00')
@@ -328,15 +325,15 @@ class WsClient(object):
                         break
                     continue
                 opcode, payload = self.recv_frame()
-                if opcode == 0x8:  # close
+                if opcode == 0x8:
                     break
-                if opcode == 0x9:  # ping → pong
+                if opcode == 0x9:
                     with self._wlock:
                         self.sock.sendall(b'\x8A' + bytes([len(payload)]) + payload if len(payload) < 126 else b'\x8A\x00')
                     continue
-                if opcode == 0xA:  # pong
+                if opcode == 0xA:
                     continue
-                if opcode != 0x1:  # text only
+                if opcode != 0x1:
                     continue
                 try:
                     msg = json.loads(payload.decode('utf-8'))
@@ -375,7 +372,6 @@ class WsClient(object):
     def _handle(self, msg):
         mtype = msg.get('type') or (msg.get('data') or {}).get('type')
 
-        # join / hello
         if mtype == 'hello' or mtype == 'join_ws':
             room = str(msg.get('room') or 'default').strip().lower()
             cid = str(msg.get('id') or msg.get('clientId') or '')
@@ -411,7 +407,6 @@ class WsClient(object):
 
         with LOCK:
             if room not in ROOMS and not (isinstance(data, dict) and data.get('type') in ('join', 'hostbeat', 'pose') and data.get('isHost')):
-                # allow host to create
                 pass
             seq, closed, entry = apply_message(room, data)
             self.room = room
@@ -427,7 +422,6 @@ class WsClient(object):
                     pass
             return
 
-        # Broadcast to peers in room
         if isinstance(data, dict) and data.get('type') == 'pose':
             ws_broadcast(room, {
                 'ok': True,
@@ -510,7 +504,6 @@ class Handler(BaseHTTPRequestHandler):
         u = urlparse(self.path)
         path = u.path or '/'
 
-        # --- WebSocket upgrade ---
         if path == '/ws':
             self._websocket_upgrade()
             return
@@ -524,6 +517,7 @@ class Handler(BaseHTTPRequestHandler):
                 'ok': True,
                 'service': 'story-mode-lan',
                 'port': PORT,
+                'host': HOST,
                 'ips': local_ips(),
                 'rooms': rooms,
                 'fast': True,
@@ -560,7 +554,6 @@ class Handler(BaseHTTPRequestHandler):
             self._json(200, {'ok': True, 't': time.time()})
             return
 
-        # HTTP poll kept as fallback
         if path == '/poll':
             qs = parse_qs(u.query)
             room = (qs.get('room') or ['default'])[0].strip().lower()
@@ -634,7 +627,6 @@ class Handler(BaseHTTPRequestHandler):
         self.send_header('Connection', 'Upgrade')
         self.send_header('Sec-WebSocket-Accept', accept)
         self.end_headers()
-        # Take ownership of the socket — handler must not close it after return
         sock = self.connection
         try:
             self.close_connection = True
@@ -663,7 +655,6 @@ class Handler(BaseHTTPRequestHandler):
                 ws_broadcast(room, {'ok': True, 'kind': 'dead', 't': time.time()})
                 self._json(200, {'ok': True, 'id': 0, 'closed': True, 't': time.time()})
                 return
-            # also push via WS for hybrid clients
             if isinstance(data, dict) and data.get('type') == 'pose':
                 ws_broadcast(room, {'ok': True, 'kind': 'pose', 'id': seq, 'data': data, 't': time.time()})
             else:
@@ -713,11 +704,12 @@ class Handler(BaseHTTPRequestHandler):
 
 def main():
     ips = local_ips()
-    print('========================================')
+    print('=' * 40)
     print('  Story Mode — مضيف (HTTP + WebSocket)')
-    print('  LAN Turbo / تزامن فوري')
-    print('========================================')
+    print('  يدعم LAN و الخوادم السحابية')
+    print('=' * 40)
     print('المنفذ:', PORT)
+    print('المضيف:', HOST)
     print('الفولدر:', ROOT)
     print('')
     print('افتح من أي جهاز على الشبكة:')
@@ -726,10 +718,25 @@ def main():
     print('  →  http://127.0.0.1:%d/' % PORT)
     print('')
     print('WebSocket: ws://IP:%d/ws' % PORT)
-    print('الموبايل: نفس الواي فاي → الصق الرابط فوق في المتصفح')
+    
+    # ✅ كشف إذا كان يعمل على خادم سحابي
+    if os.environ.get('RAILWAY_ENVIRONMENT') or os.environ.get('RENDER'):
+        print('✅ يعمل على خادم سحابي!')
+        railway_url = os.environ.get('RAILWAY_PUBLIC_DOMAIN', '')
+        render_url = os.environ.get('RENDER_EXTERNAL_HOSTNAME', '')
+        if railway_url:
+            print('🔗 رابط Railway:', railway_url)
+        if render_url:
+            print('🔗 رابط Render:', render_url)
+        if not railway_url and not render_url:
+            print('⚠️ رابط الخادم غير معروف - تحقق من لوحة التحكم')
+    else:
+        print('🏠 يعمل محلياً (LAN)')
+    
     print('فحص API: http://IP:%d/status' % PORT)
-    print('========================================')
-    server = ThreadingHTTPServer(('0.0.0.0', PORT), Handler)
+    print('=' * 40)
+    
+    server = ThreadingHTTPServer((HOST, PORT), Handler)
     server.daemon_threads = True
     try:
         server.request_queue_size = 256

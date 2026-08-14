@@ -26,6 +26,8 @@
     lanSince: 0,
     lanPollTimer: null,
     useLan: false,
+    useCloudServer: false, // ✅ جديد: اختيار الخادم السحابي
+    cloudServerUrl: 'https://your-server-name.up.railway.app', // ✅ رابط Railway
     graphicsLevel: 3,
     scaleMode: 'uniform', // uniform | axis
     netPing: 0,
@@ -92,7 +94,6 @@
   }
 
   function askName(title, defaultVal, callback) {
-    // Simple in-page prompt replacement via toast + temporary input
     var existing = document.getElementById('inline-prompt');
     if (existing) existing.remove();
     var wrap = document.createElement('div');
@@ -127,8 +128,6 @@
     input.select();
   }
 
-
-
   // ===== SCENE =====
   const scene = new THREE.Scene();
   scene.background = new THREE.Color(0x87ceeb);
@@ -147,11 +146,6 @@
     state.graphicsLevel = level;
     try { localStorage.setItem('sm_graphics', String(level)); } catch (e) {}
     var dpr = window.devicePixelRatio || 1;
-    // 1 حقير: lowest res, no shadows, no AA — max FPS
-    // 2 منخفض: low res, basic shadows
-    // 3 متوسط: balanced
-    // 4 عالي: high
-    // 5 أسطوري: max quality
     var cfg = {
       1: { pr: 0.6, shadows: false, map: 512, soft: 0.55, softCast: false, type: THREE.BasicShadowMap },
       2: { pr: 0.85, shadows: true, map: 512, soft: 0.75, softCast: true, type: THREE.BasicShadowMap },
@@ -171,9 +165,8 @@
           _sunLightRef.shadow.map = null;
         }
       }
-      _sunLightRef.intensity = 1.2 * (cfg.fog || 1); // keep readable
+      _sunLightRef.intensity = 1.2 * (cfg.fog || 1);
     }
-    // slightly reduce ground/scene load on low
     try {
       if (typeof ground !== 'undefined' && ground && ground.material) {
         ground.receiveShadow = cfg.shadows;
@@ -258,13 +251,11 @@
     var g = new THREE.Group();
     var body = box(1.8, 0.55, 4.2, mat(bodyColor, { r: 0.3, m: 0.55 })); body.position.y = 0.55; g.add(body);
     var cabin = box(1.6, 0.5, 2.0, mat(bodyColor, { r: 0.3, m: 0.5 })); cabin.position.set(0, 1.05, -0.15); g.add(cabin);
-    // Transparent glass — front, rear, sides
     var glass = mat(0x88ccee, { r: 0.1, m: 0.7, t: true, o: 0.35 });
     var fw = box(1.5, 0.42, 0.05, glass); fw.position.set(0, 1.08, 0.88); g.add(fw);
     var rw = box(1.45, 0.38, 0.05, glass); rw.position.set(0, 1.08, -1.15); g.add(rw);
     var swL = box(0.05, 0.38, 1.7, glass); swL.position.set(-0.82, 1.08, -0.1); g.add(swL);
     var swR = swL.clone(); swR.position.x = 0.82; g.add(swR);
-    // Real interior seats (rideable markers for programming mode)
     var seatMat = mat(0x1a1a1a, { r: 0.85 });
     var seatBackMat = mat(0x222222, { r: 0.8 });
     function addSeat(x, z, name) {
@@ -305,10 +296,8 @@
   }
   function makeBus() {
     var g = new THREE.Group();
-    // Flexible coach body (slightly segmented look)
     var body = box(2.6, 2.4, 8, mat(0xfbbf24, { r: 0.4, m: 0.3 })); body.position.y = 1.4; g.add(body);
     var roof = box(2.5, 0.15, 7.8, mat(0xe5a800, { r: 0.5 })); roof.position.y = 2.65; g.add(roof);
-    // Fully transparent windows all around
     var glass = mat(0x88ccee, { r: 0.1, m: 0.65, t: true, o: 0.3 });
     for (var i = 0; i < 5; i++) {
       var win = box(0.06, 0.95, 1.15, glass); win.position.set(1.32, 1.75, -3.0 + i * 1.5); g.add(win);
@@ -316,7 +305,6 @@
     }
     var frontGlass = box(2.3, 1.1, 0.06, glass); frontGlass.position.set(0, 1.8, 4.0); g.add(frontGlass);
     var rearGlass = box(2.3, 1.0, 0.06, glass); rearGlass.position.set(0, 1.75, -4.0); g.add(rearGlass);
-    // Real seats inside (rows) — rideable
     var seatMat = mat(0x1e3a5f, { r: 0.8 });
     var backMat = mat(0x163050, { r: 0.75 });
     for (var row = 0; row < 6; row++) {
@@ -331,7 +319,6 @@
         g.add(b);
       });
     }
-    // Driver seat
     var ds = box(0.55, 0.12, 0.5, mat(0x111)); ds.position.set(-0.6, 0.9, 3.3); ds.userData = { isSeat: true, seatName: 'driver' }; g.add(ds);
     var wg = new THREE.CylinderGeometry(0.5, 0.5, 0.3, 12); var wm = mat(0x222);
     [[-1.3, 0.5, 2.8], [1.3, 0.5, 2.8], [-1.3, 0.5, -2.8], [1.3, 0.5, -2.8]].forEach(function (p) {
@@ -359,7 +346,6 @@
     var fw = box(2.0, 0.7, 0.05, glass); fw.position.set(0, 1.7, 2.75); g.add(fw);
     var swL = box(0.05, 0.6, 1.4, glass); swL.position.set(-1.12, 1.65, 1.6); g.add(swL);
     var swR = swL.clone(); swR.position.x = 1.12; g.add(swR);
-    // Seats + stretcher area
     var sm = mat(0x1a1a1a, { r: 0.85 });
     var ds = box(0.5, 0.1, 0.45, sm); ds.position.set(-0.5, 0.8, 1.9); ds.userData = { isSeat: true, seatName: 'driver' }; g.add(ds);
     var ps = box(0.5, 0.1, 0.45, sm); ps.position.set(0.5, 0.8, 1.9); ps.userData = { isSeat: true, seatName: 'passenger' }; g.add(ps);
@@ -550,7 +536,6 @@
     return g;
   }
 
-
   function makeBike() {
     var g = new THREE.Group();
     var frame = box(0.08, 0.08, 1.4, mat(0x333)); frame.position.set(0, 0.55, 0); g.add(frame);
@@ -580,7 +565,6 @@
     var fw = box(2.0, 0.7, 0.05, glass); fw.position.set(0, 1.7, 2.55); g.add(fw);
     var swL = box(0.05, 0.65, 1.3, glass); swL.position.set(-1.1, 1.65, 1.8); g.add(swL);
     var swR = swL.clone(); swR.position.x = 1.1; g.add(swR);
-    // Seats
     var sm = mat(0x222, { r: 0.85 });
     var ds = box(0.55, 0.12, 0.5, sm); ds.position.set(-0.5, 0.85, 1.9); ds.userData = { isSeat: true, seatName: 'driver' }; g.add(ds);
     var ps = box(0.55, 0.12, 0.5, sm); ps.position.set(0.5, 0.85, 1.9); ps.userData = { isSeat: true, seatName: 'passenger' }; g.add(ps);
@@ -671,7 +655,6 @@
     var frame = box(3.1, 1.9, 0.1, mat(0x333)); frame.position.y = 4.5; g.add(frame);
     return g;
   }
-
 
   function makeDesk() {
     var g = new THREE.Group();
@@ -965,7 +948,6 @@
     canvas.width = 256;
     canvas.height = 64;
     var ctx = canvas.getContext('2d');
-    // rounded background
     ctx.clearRect(0, 0, 256, 64);
     var padX = 12, padY = 10;
     ctx.font = 'bold 28px Tahoma, Arial, sans-serif';
@@ -974,23 +956,19 @@
     var boxH = 40;
     var bx = (256 - boxW) / 2;
     var by = (64 - boxH) / 2;
-    // shadow
     ctx.fillStyle = 'rgba(0,0,0,0.45)';
     roundRect(ctx, bx + 2, by + 3, boxW, boxH, 12);
     ctx.fill();
-    // gradient-ish solid
     var grd = ctx.createLinearGradient(bx, by, bx, by + boxH);
     grd.addColorStop(0, 'rgba(12, 20, 40, 0.92)');
     grd.addColorStop(1, 'rgba(8, 14, 28, 0.95)');
     ctx.fillStyle = grd;
     roundRect(ctx, bx, by, boxW, boxH, 12);
     ctx.fill();
-    // border
     ctx.strokeStyle = 'rgba(0, 212, 255, 0.75)';
     ctx.lineWidth = 2;
     roundRect(ctx, bx, by, boxW, boxH, 12);
     ctx.stroke();
-    // text
     ctx.fillStyle = '#e8f4ff';
     ctx.textAlign = 'center';
     ctx.textBaseline = 'middle';
@@ -1027,7 +1005,6 @@
 
   function attachNameTag(group, displayName, visible) {
     if (!group) return null;
-    // remove old
     if (group.userData.nameTag) {
       group.remove(group.userData.nameTag);
       if (group.userData.nameTag.material && group.userData.nameTag.material.map) {
@@ -1051,7 +1028,6 @@
   }
 
   function getLevelRespawnPoints(kind) {
-    // kind: 'lan' | 'split' — spaced so players don't stack on each other
     var defaults = kind === 'lan'
       ? [{ x: -6, y: 0, z: 0 }, { x: -4, y: 0, z: 0 }, { x: -2, y: 0, z: 0 }, { x: 0, y: 0, z: 0 },
          { x: 2, y: 0, z: 0 }, { x: 4, y: 0, z: 0 }, { x: 6, y: 0, z: 0 }, { x: 0, y: 0, z: 3 }]
@@ -1117,7 +1093,6 @@
     for (var i = 0; i < state.buildObjects.length; i++) {
       var o = state.buildObjects[i];
       if (!o || !o.userData || !o.userData.isVehicle) continue;
-      // occupied by someone else?
       if (o.userData.drivenBy != null && o.userData.drivenBy !== player.id) continue;
       var dx = o.position.x - px, dz = o.position.z - pz;
       var d = dx * dx + dz * dz;
@@ -1133,7 +1108,6 @@
     vehicle.userData.drivenBy = player.id;
     player.yaw = vehicle.rotation.y;
     if (player.group) player.group.visible = true;
-    // فك قفل الإدخال
     if (state.script) {
       state.script.inputLocked[player.id] = false;
       state.script.forcedInput[player.id] = null;
@@ -1148,7 +1122,6 @@
     player.vehicle = null;
     player.vehicleSeat = null;
     if (player.group) {
-      // ابعد عن العربية عشان متتزنقش جواها
       var side = 3.8;
       player.group.position.x = v.position.x + Math.cos(player.yaw) * side;
       player.group.position.z = v.position.z - Math.sin(player.yaw) * side;
@@ -1168,7 +1141,6 @@
     }
   }
 
-  // Solid collision vs build objects (and other players)
   function playerCollides(player) {
     if (!player || !player.group) return false;
     var x = player.group.position.x;
@@ -1186,11 +1158,9 @@
       if (!o || !o.visible) continue;
       if (o.userData && o.userData.noCollision) continue;
       b = new THREE.Box3().setFromObject(o);
-      // ignore ultra-flat ground-like if height almost 0 at world y0 - still collide walls/buildings
       if (b.isEmpty()) continue;
       if (pBox.intersectsBox(b)) return true;
     }
-    // other local player (split only — soft, so you don't freeze if spawned stacked)
     if (state.playType === 'split') {
       for (i = 0; i < players.length; i++) {
         if (!players[i] || players[i] === player || !players[i].group) continue;
@@ -1199,15 +1169,11 @@
         if (dx * dx + dz * dz < (r * 1.6) * (r * 1.6)) return true;
       }
     }
-    // IMPORTANT: do NOT solid-collide remote net players.
-    // In LAN/online everyone often starts near the same spawn → collision froze movement
-    // while jump still worked (Y is not blocked the same way).
     return false;
   }
 
   function updatePlayerMovement(player, delta, input) {
     if (!player.group) return;
-    // Script can lock player input or force movement
     if (state.script.inputLocked[player.id]) {
       if (state.script.forcedInput[player.id]) {
         input = state.script.forcedInput[player.id];
@@ -1215,7 +1181,6 @@
         input = { up: false, down: false, left: false, right: false, jump: false, run: false };
       }
     } else if (state.script.forcedInput[player.id]) {
-      // merge forced over real
       var fi = state.script.forcedInput[player.id];
       input = {
         up: fi.up != null ? fi.up : input.up,
@@ -1227,11 +1192,9 @@
         lookX: fi.lookX != null ? fi.lookX : input.lookX
       };
     }
-    // Driving a vehicle
     if (player.vehicle) {
       var v = player.vehicle;
       var isDriver = !player.vehicleSeat || player.vehicleSeat === 'driver';
-      // ركاب: يثبتوا على العربية من غير ما يسوقوا
       if (!isDriver) {
         player.group.position.x = v.position.x;
         player.group.position.y = (v.position.y || 0) + 0.9;
@@ -1241,9 +1204,7 @@
         return;
       }
       var vSpeed = input.run ? 16 : 10;
-      // ماوس يمين/شمال يلف العربية
       if (input.lookX !== undefined) player.yaw -= input.lookX * 0.04;
-      // A/D يلفوا كمان حتى بدون حركة للأمام
       if (input.left) player.yaw += 1.8 * delta;
       if (input.right) player.yaw -= 1.8 * delta;
       v.rotation.y = player.yaw;
@@ -1257,17 +1218,12 @@
         var oldvx = v.position.x, oldvz = v.position.z;
         v.position.x += vm * vSpeed * delta;
         v.position.z += vz * vSpeed * delta;
-        // تصادم خفيف: بس لو الجسم صلب جداً — تجاهل التصادم مع الأرضيات/اللاعبين
-        // عشان العربية متتلصقش وتفضل واقفة
         var saved = { x: player.group.position.x, z: player.group.position.z };
         player.group.position.x = v.position.x;
         player.group.position.z = v.position.z;
-        // لا نرجع الحركة إلا لو التصادم قوي مع مبنى (اختياري مخفف)
-        // سابقاً playerCollides كان يمنع الحركة بالكامل
         player.group.position.x = v.position.x;
         player.group.position.z = v.position.z;
       }
-      // seat player on vehicle
       player.group.position.x = v.position.x;
       player.group.position.y = (v.position.y || 0) + 0.9;
       player.group.position.z = v.position.z;
@@ -1279,19 +1235,16 @@
     var speed = input.run ? 7.5 : 4.2;
     if (input.lookX !== undefined) player.yaw -= input.lookX * 0.04;
 
-    // Character faces camera direction
     player.group.rotation.y = THREE.MathUtils.lerp(player.group.rotation.y, player.yaw + Math.PI, 0.3);
 
-    // Camera forward = where the player should walk on W
-    // Camera sits at (sin(yaw)*d, cos(yaw)*d) behind player, so forward is (-sin, -cos)
     var fwdX = -Math.sin(player.yaw);
     var fwdZ = -Math.cos(player.yaw);
     var rightX = Math.cos(player.yaw);
     var rightZ = -Math.sin(player.yaw);
 
     var mx = 0, mz = 0;
-    if (input.up) { mx += fwdX; mz += fwdZ; }      // W = toward camera look
-    if (input.down) { mx -= fwdX; mz -= fwdZ; }    // S = opposite
+    if (input.up) { mx += fwdX; mz += fwdZ; }
+    if (input.down) { mx -= fwdX; mz -= fwdZ; }
     if (input.right) { mx += rightX; mz += rightZ; }
     if (input.left) { mx -= rightX; mz -= rightZ; }
 
@@ -1302,7 +1255,6 @@
       var step = speed * delta;
       var oldX = player.group.position.x;
       var oldZ = player.group.position.z;
-      // Move X then Z separately so you slide along walls (solid bodies)
       player.group.position.x = oldX + mx * step;
       if (playerCollides(player)) player.group.position.x = oldX;
       player.group.position.z = oldZ + mz * step;
@@ -1324,10 +1276,8 @@
   // ===== FLY CAMERA =====
   function updateFlyCamera(delta) {
     var speed = (state.keys['ShiftLeft'] || state.keys['ShiftRight']) ? 8 : 14;
-    // When shift held for down, don't use it as speed boost - separate
     var moveSpeed = 14;
     if (state.keys['KeyW'] || state.keys['KeyS'] || state.keys['KeyA'] || state.keys['KeyD']) {
-      // normal
     }
     var forward = new THREE.Vector3(-Math.sin(state.flyYaw) * Math.cos(state.flyPitch), 0, -Math.cos(state.flyYaw) * Math.cos(state.flyPitch));
     forward.y = 0; forward.normalize();
@@ -1336,7 +1286,6 @@
     if (state.keys['KeyS']) state.flyPos.addScaledVector(forward, -moveSpeed * delta);
     if (state.keys['KeyA']) state.flyPos.addScaledVector(right, -moveSpeed * delta);
     if (state.keys['KeyD']) state.flyPos.addScaledVector(right, moveSpeed * delta);
-    // Space = up, Shift = down
     if (state.keys['Space']) state.flyPos.y += moveSpeed * delta;
     if (state.keys['ShiftLeft'] || state.keys['ShiftRight']) state.flyPos.y -= moveSpeed * delta;
     if (state.flyPos.y < 1) state.flyPos.y = 1;
@@ -1379,16 +1328,13 @@
     if (state.mode === 'lobby' && xPressed && !prevXPressed && !state.player2Joined) joinPlayer2();
     prevXPressed = xPressed;
     var lx = pad.axes[0] || 0, ly = pad.axes[1] || 0, rx = pad.axes[2] || 0, dead = 0.2;
-    // Buttons: 0=A/X, 1=B/Circle, 8=Share, 9=Options/Start (varies by pad)
     var optionsPressed = (pad.buttons[9] && pad.buttons[9].pressed) || (pad.buttons[8] && pad.buttons[8].pressed);
     var circlePressed = pad.buttons[1] && pad.buttons[1].pressed;
-    // D-pad
     var dUp = pad.buttons[12] && pad.buttons[12].pressed;
     var dDown = pad.buttons[13] && pad.buttons[13].pressed;
     var dLeft = pad.buttons[14] && pad.buttons[14].pressed;
     var dRight = pad.buttons[15] && pad.buttons[15].pressed;
 
-    // Options opens/closes pause for player 2 in split (or full in online if host uses pad - only P2)
     if (state.mode === 'play' && optionsPressed && !prevOptionsPressed) {
       if (state.paused && state.pauseOwner === 1) {
         closePause();
@@ -1459,7 +1405,6 @@
     );
     base.position.y = 0.06;
     g.add(base);
-    // number disc
     var disc = new THREE.Mesh(
       new THREE.CircleGeometry(0.22, 16),
       new THREE.MeshBasicMaterial({ color: 0xffffff })
@@ -1527,7 +1472,6 @@
     var r = state.currentLevelId && state.levels[state.currentLevelId]
       ? ensureLevelRespawns(state.levels[state.currentLevelId])
       : { lan: [], split: [] };
-    // count from markers for live accuracy
     var lanCount = 0, splitCount = 0;
     (state.respawnMarkers || []).forEach(function (m) {
       if (m.userData.respawnKind === 'lan') lanCount++;
@@ -1566,7 +1510,6 @@
   function removeRespawnMarker(mesh) {
     scene.remove(mesh);
     state.respawnMarkers = state.respawnMarkers.filter(function (m) { return m !== mesh; });
-    // re-index
     var lanI = 0, splitI = 0;
     state.respawnMarkers.forEach(function (m) {
       if (m.userData.respawnKind === 'lan') m.userData.respawnIndex = lanI++;
@@ -1617,7 +1560,6 @@
   function createNewLevel() {
     askName('اسم اللفل:', 'لفل ' + (Object.keys(state.levels).length + 1), function (name) {
       if (!name) return;
-      // SAVE current level objects before switching away
       if (state.currentLevelId && state.levels[state.currentLevelId]) {
         state.levels[state.currentLevelId].objects = serializeObjects();
         saveRespawnsFromMarkers();
@@ -1633,7 +1575,6 @@
   }
 
   function switchToLevel(id) {
-    // Always save current level state before switching (even if empty)
     if (state.currentLevelId && state.levels[state.currentLevelId]) {
       state.levels[state.currentLevelId].objects = serializeObjects();
       saveRespawnsFromMarkers();
@@ -1646,7 +1587,6 @@
 
   function deleteLevel(id, e) {
     e.stopPropagation();
-    /* no confirm */
     delete state.levels[id];
     if (state.currentLevelId === id) {
       state.currentLevelId = null; clearBuildObjects();
@@ -1703,7 +1643,6 @@
   // ===== ZIP DOWNLOAD =====
   function downloadAllAsZip() {
     if (typeof JSZip === 'undefined') { toast('JSZip غير متوفر', 'error'); return; }
-    // Auto-save current
     if (state.currentLevelId) {
       state.levels[state.currentLevelId].objects = serializeObjects();
       saveRespawnsFromMarkers();
@@ -1727,7 +1666,6 @@
       var soundsF = lf.folder('الاصوات');
       var scriptsF = lf.folder('البرمجيات');
 
-      // Build data (includes respawn points)
       var resp = ensureLevelRespawns(lv);
       var buildData = JSON.stringify({
         levelId: id,
@@ -1738,13 +1676,11 @@
       buildF.file('build.json', buildData);
       globalBuild.file(folderName + '_build.json', buildData);
 
-      // Scripts
       (lv.scripts || []).forEach(function (s) {
         scriptsF.file(s.name, s.content || '');
         globalScripts.file(folderName + '_' + s.name, s.content || '');
       });
 
-      // Sounds (data URLs)
       (lv.sounds || []).forEach(function (s) {
         if (s.dataUrl) {
           var base64 = s.dataUrl.split(',')[1] || '';
@@ -1766,7 +1702,6 @@
       });
     });
 
-    // Manifest
     zip.file('manifest.json', JSON.stringify({
       version: 5,
       exportedAt: new Date().toISOString(),
@@ -1789,15 +1724,12 @@
     if (typeof JSZip === 'undefined') { toast('JSZip غير متوفر', 'error'); if (onDone) onDone(false, 0); return; }
     JSZip.loadAsync(arrayBuffer).then(function (zip) {
         var promises = [];
-        var levelMap = {}; // folderName -> { id, name, objects, scripts, sounds }
+        var levelMap = {};
 
         zip.forEach(function (relativePath, zipEntry) {
           if (zipEntry.dir) return;
           var parts = relativePath.replace(/\\/g, '/').split('/');
 
-          // levels/LevelName/البناء/build.json
-          // levels/LevelName/البرمجيات/file.js
-          // levels/LevelName/الاصوات/file.mp3
           if (parts[0] === 'levels' && parts.length >= 3) {
             var levelFolder = parts[1];
             if (!levelMap[levelFolder]) {
@@ -1849,7 +1781,6 @@
           Object.keys(levelMap).forEach(function (folder) {
             var data = levelMap[folder];
             var id = data.id || generateLevelId();
-            // Merge if exists by name
             var existingId = null;
             Object.keys(state.levels).forEach(function (lid) {
               if (state.levels[lid].name === data.name) existingId = lid;
@@ -1871,7 +1802,6 @@
           renderLevelsList();
           updateLobbyLevelSelect();
           if (count > 0) {
-            // Prefer a level that actually has objects
             var bestId = null;
             Object.keys(state.levels).forEach(function (lid) {
               var lv = state.levels[lid];
@@ -1907,13 +1837,10 @@
     reader.readAsArrayBuffer(file);
   }
 
-  // Load pack ZIP from same folder as index.html (works local server + GitHub Pages)
-  // User types name without .zip — we try name.zip then name
   function normalizePackName(name) {
     name = (name || '').trim();
     if (!name) return '';
     name = name.replace(/\\/g, '/');
-    // strip path, keep basename
     if (name.indexOf('/') !== -1) name = name.split('/').pop();
     if (/\.zip$/i.test(name)) name = name.replace(/\.zip$/i, '');
     return name;
@@ -1926,14 +1853,12 @@
       if (onDone) onDone(false, 0);
       return;
     }
-    // Relative to the page URL (GitHub Pages friendly)
     var candidates = [
       base + '.zip',
       base,
       encodeURIComponent(base) + '.zip',
       encodeURIComponent(base)
     ];
-    // unique
     candidates = candidates.filter(function (v, i, a) { return a.indexOf(v) === i; });
 
     function tryNext(i) {
@@ -1967,7 +1892,6 @@
     filter = (filter || '').trim().toLowerCase();
     var items = [];
     if (filter) {
-      // search all categories
       Object.keys(buildCatalog).forEach(function (cat) {
         buildCatalog[cat].forEach(function (item) {
           if (item.name.toLowerCase().indexOf(filter) !== -1 || item.id.toLowerCase().indexOf(filter) !== -1) {
@@ -2020,7 +1944,6 @@
     mesh.position.set(pos.x, 0, pos.z);
     mesh.userData.buildId = state.selectedItem.id;
     mesh.userData.catalogItem = state.selectedItem;
-    // Auto name: first = base name, next = name 2, name 3...
     var baseName = state.selectedItem.name;
     var sameCount = 0;
     state.buildObjects.forEach(function (o) {
@@ -2035,16 +1958,13 @@
 
   function onBuildClick(e) {
     if (state.mode !== 'build' || state.flyMode) return;
-    // ignore clicks on UI
     if (e.target.closest && (e.target.closest('#obj-toolbar') || e.target.closest('.hierarchy-panel') || e.target.closest('.build-toolbar') || e.target.closest('.build-sidebar-wrap') || e.target.closest('.level-panel') || e.target.closest('#respawn-choice-panel'))) return;
 
     mouse.x = (e.clientX / window.innerWidth) * 2 - 1;
     mouse.y = -(e.clientY / window.innerHeight) * 2 + 1;
     raycaster.setFromCamera(mouse, buildCamera);
 
-    // ===== RESPAWN PLACEMENT MODE =====
     if (state.respawnPlaceMode) {
-      // click existing respawn marker to remove
       var hitsR = raycaster.intersectObjects(state.respawnMarkers, true);
       if (hitsR.length) {
         var rm = hitsR[0].object;
@@ -2059,7 +1979,6 @@
       return;
     }
 
-    // Move mode from hierarchy context
     if (typeof moveModeObj !== 'undefined' && moveModeObj) {
       var hitsM = raycaster.intersectObject(ground);
       if (hitsM.length) {
@@ -2071,9 +1990,6 @@
       }
     }
 
-    // Gizmo handled on mousedown
-
-    // Click on existing object to select
     var hitsObj = raycaster.intersectObjects(state.buildObjects, true);
     if (hitsObj.length && state.currentTool !== 'place') {
       var obj = hitsObj[0].object;
@@ -2090,7 +2006,6 @@
       var hits = raycaster.intersectObject(ground);
       if (hits.length) placeObject(hits[0].point);
     } else if (state.currentTool === 'delete') {
-      // also allow deleting respawn markers
       var hitsR2 = raycaster.intersectObjects(state.respawnMarkers, true);
       if (hitsR2.length) {
         var rm2 = hitsR2[0].object;
@@ -2113,7 +2028,6 @@
         }
       }
     } else {
-      // click empty - deselect
       if (!hitsObj.length) selectBuildObject(null);
     }
   }
@@ -2124,7 +2038,6 @@
     mouse.y = -(e.clientY / window.innerHeight) * 2 + 1;
     raycaster.setFromCamera(mouse, buildCamera);
 
-    // Hover highlight on axes when not dragging
     if (!gizmoDrag && selectedBuildObj && transformGizmo && (objToolMode === 'move' || objToolMode === 'scale')) {
       var hAxis = pickGizmo(raycaster);
       setGizmoHover(hAxis);
@@ -2132,15 +2045,12 @@
       setGizmoHover(null);
     }
 
-    // Axis gizmo drag — click axis + drag along it (also accept buttons===0 with pointer capture fallback via grabbed flag)
     if (gizmoDrag && gizmoDrag.grabbed && selectedBuildObj) {
       var axis = gizmoDrag.axis;
-      // Mouse delta in NDC-ish pixels projected onto screen axis direction
       var mx = (e.clientX - gizmoDrag.startX);
-      var my = -(e.clientY - gizmoDrag.startY); // screen y up
+      var my = -(e.clientY - gizmoDrag.startY);
       var sa = gizmoDrag.screenAxis || { x: 1, y: 0 };
       var along = mx * sa.x + my * sa.y;
-      // Scale sensitivity by distance to object
       var dist = buildCamera.position.distanceTo(gizmoDrag.startPos);
       var sens = dist * 0.0025;
       var moveAmt = along * sens;
@@ -2170,7 +2080,6 @@
       return;
     }
 
-    // Legacy free drag on ground (optional when isDraggingObj)
     if (selectedBuildObj && isDraggingObj && objToolMode === 'move') {
       var hits = raycaster.intersectObject(ground);
       if (hits.length) {
@@ -2185,7 +2094,6 @@
       updateObjToolbarPos();
       return;
     }
-    // Fallback scale drag without axis (uniform) if no gizmo handle grabbed
     if (selectedBuildObj && objToolMode === 'scale' && (e.buttons === 1) && !gizmoDrag && state.scaleMode === 'uniform') {
       var s = selectedBuildObj.scale.x + e.movementY * -0.01;
       s = Math.max(0.15, Math.min(8, s));
@@ -2203,9 +2111,6 @@
   // ===== SCREENS =====
 
   // ===== SCRIPT RUNTIME (PLAY MODE ONLY) =====
-  // IMPORTANT: Scripts never affect build mode.
-  // Objects in build mode are pure static data.
-  // Scripts only execute when state.mode === 'play'.
   var activeScriptCleanups = [];
 
   function stopAllScripts() {
@@ -2213,7 +2118,6 @@
       try { fn(); } catch (e) { console.warn('script cleanup', e); }
     });
     activeScriptCleanups = [];
-    // reset script control layer
     state.script.inputLocked = [false, false];
     state.script.forcedInput = [null, null];
     state.script.cameraOverride = [null, null];
@@ -2230,7 +2134,6 @@
   }
 
   function runLevelScripts(levelId) {
-    // HARD GUARD: never run in build mode
     if (state.mode === 'build' || state.mode === 'menu' || state.mode === 'lobby') {
       return;
     }
@@ -2240,7 +2143,6 @@
     var level = state.levels[levelId];
     if (!level || !level.scripts || !level.scripts.length) return;
 
-    // ===== FULL GameAPI — programming controls everything =====
     function wrapObj(o) {
       if (!o) return null;
       return {
@@ -2263,7 +2165,6 @@
     }
 
     var GameAPI = {
-      // --- meta ---
       mode: function () { return state.mode; },
       isPlay: function () { return state.mode === 'play'; },
       THREE: THREE,
@@ -2271,7 +2172,6 @@
       time: function () { return state.clock.elapsedTime; },
       delta: function () { return Math.min(state.clock.getDelta(), 0.05) * (state.script.timeScale || 1); },
 
-      // --- objects ---
       getObjects: function () {
         if (state.mode !== 'play') return [];
         return state.buildObjects.map(wrapObj);
@@ -2340,7 +2240,6 @@
         if (ud.rightLeg) ud.rightLeg.rotation.x = s * 0.5;
       },
 
-      // --- players (the actual human-controlled characters) ---
       getPlayer: function (idx) {
         idx = idx || 0;
         var p = players[idx];
@@ -2348,8 +2247,8 @@
         return {
           index: idx,
           mesh: p.group,
-          position: p.group.position,
-          rotation: p.group.rotation,
+          position: p.position,
+          rotation: p.rotation,
           yaw: p.yaw,
           velocity: p.velocity,
           camera: p.camera,
@@ -2381,7 +2280,6 @@
         state.script.inputLocked[1] = !!locked;
       },
       forcePlayerInput: function (idx, inputObj) {
-        // { up, down, left, right, jump, run, lookX } or null to clear
         state.script.forcedInput[idx || 0] = inputObj;
       },
       teleportPlayer: function (idx, x, y, z, yaw) {
@@ -2392,8 +2290,6 @@
         p.velocity.set(0, 0, 0);
       },
 
-      // --- multiplayer / script-spawned objects ---
-      /** Add a mesh to the play scene AND buildObjects so vehicles/sync work for everyone */
       addObject: function (mesh, opts) {
         opts = opts || {};
         if (!mesh) return null;
@@ -2403,7 +2299,6 @@
         if (!mesh.userData.instanceName) {
           mesh.userData.instanceName = 'script_' + Date.now().toString(36) + '_' + Math.floor(Math.random() * 1e4);
         }
-        // ensure unique name
         var base = mesh.userData.instanceName;
         var n = 1;
         var names = {};
@@ -2433,12 +2328,10 @@
         if (m.parent) m.parent.remove(m);
         else scene.remove(m);
       },
-      /** Put local player into a vehicle (uses engine driving + network pose sync) */
       enterVehicle: function (idx, vehicleMesh, seatName) {
         idx = idx || 0;
         var p = players[idx];
         if (!p || !vehicleMesh) return false;
-        // register if needed
         if (state.buildObjects.indexOf(vehicleMesh) === -1) {
           this.addObject(vehicleMesh, { isVehicle: true, name: vehicleMesh.userData.instanceName });
         }
@@ -2451,11 +2344,9 @@
         vehicleMesh.userData.drivenBy = p.id;
         p.yaw = vehicleMesh.rotation.y;
         if (p.group) p.group.visible = true;
-        // مهم: فك أي قفل إدخال عشان السائق يقدر يحرك بـ WASD
         state.script.inputLocked[idx] = false;
         state.script.forcedInput[idx] = null;
         p.velocity.set(0, 0, 0);
-        // ثبت اللاعب فوق العربية فوراً
         p.group.position.x = vehicleMesh.position.x;
         p.group.position.y = (vehicleMesh.position.y || 0) + 0.9;
         p.group.position.z = vehicleMesh.position.z;
@@ -2470,7 +2361,6 @@
         p.vehicle = null;
         p.vehicleSeat = null;
         if (p.group) {
-          // جنب العربية بمسافة كافية عشان متتزنقش
           var side = 3.8;
           p.group.position.x = v.position.x + Math.cos(p.yaw) * side;
           p.group.position.z = v.position.z - Math.sin(p.yaw) * side;
@@ -2479,7 +2369,6 @@
         }
         return true;
       },
-      /** Remote / all visible player positions for cutscenes & logic */
       getNetPlayers: function () {
         var list = [];
         Object.keys(state.remoteMeshes || {}).forEach(function (id) {
@@ -2560,7 +2449,6 @@
         for (var i = 0; i < list.length; i++) if (list[i].name === name) return list[i].dataUrl;
         return null;
       },
-      /** Send custom data to other clients (scripts). payload must be JSON-serializable. */
       netSend: function (payload) {
         if (!payload || typeof payload !== 'object') return;
         var msg = { type: 'script_net', id: state.myNetId || 'local', data: payload };
@@ -2572,7 +2460,6 @@
           try { state.connection.send(msg); } catch (e) {}
         }
       },
-      /** Listen for Game.netSend from other clients. Returns unsubscribe fn. */
       onNet: function (fn) {
         if (typeof fn !== 'function') return function () {};
         if (!state.script.netHandlers) state.script.netHandlers = [];
@@ -2584,9 +2471,7 @@
         };
       },
 
-      // --- camera ---
       setCamera: function (idx, opts) {
-        // opts: { x,y,z, lookX,lookY,lookZ, fov, lerp }
         state.script.cameraOverride[idx || 0] = opts || null;
       },
       clearCamera: function (idx) {
@@ -2600,9 +2485,7 @@
       setCamHeight: function (h) { state.camHeight = h; },
       setCamSide: function (s) { state.camSide = s; },
 
-      // --- cutscene system ---
       startCutscene: function (opts) {
-        // opts: { x,y,z, lookX,lookY,lookZ, fov, blackBars, lockPlayers }
         state.script.cutscene = true;
         state.script.cutsceneCam = opts || { x: 10, y: 8, z: 10, lookX: 0, lookY: 1, lookZ: 0, fov: 50 };
         if (opts && opts.blackBars !== false) state.script.blackBars = true;
@@ -2628,7 +2511,6 @@
       },
       isCutscene: function () { return !!state.script.cutscene; },
 
-      // --- UI / subtitle / bars ---
       subtitle: function (text) {
         state.script.subtitle = text || '';
         updateScriptUI();
@@ -2639,7 +2521,6 @@
       },
       toast: function (msg, type) { if (state.mode === 'play') toast(msg, type || 'info'); },
 
-      // --- time ---
       setTimeScale: function (s) { state.script.timeScale = Math.max(0, s); },
       getTimeScale: function () { return state.script.timeScale; },
       wait: function (seconds, callback) {
@@ -2649,12 +2530,10 @@
       },
       after: function (seconds, callback) { this.wait(seconds, callback); },
 
-      // --- flags / state machine for story ---
       setFlag: function (key, val) { state.script.flags[key] = val; },
       getFlag: function (key, def) { return state.script.flags.hasOwnProperty(key) ? state.script.flags[key] : def; },
       toggleFlag: function (key) { state.script.flags[key] = !state.script.flags[key]; return state.script.flags[key]; },
 
-      // --- sounds (if level has them) ---
       playSound: function (name) {
         var lid = state.currentLevelId || state.selectedPlayLevel;
         var lv = lid && state.levels[lid];
@@ -2671,10 +2550,9 @@
         }
       },
 
-      // --- input query ---
       isKeyDown: function (code) { return !!state.keys[code]; },
       getPlayerInput: function (idx) {
-        if (idx === 1) return null; // gamepad polled elsewhere
+        if (idx === 1) return null;
         return {
           up: !!state.keys['KeyW'], down: !!state.keys['KeyS'],
           left: !!state.keys['KeyA'], right: !!state.keys['KeyD'],
@@ -2682,7 +2560,6 @@
         };
       },
 
-      // --- distance helpers ---
       distance: function (a, b) {
         var ax = a.x != null ? a.x : (a.position ? a.position.x : 0);
         var az = a.z != null ? a.z : (a.position ? a.position.z : 0);
@@ -2695,14 +2572,12 @@
         return this.distance(a, b) <= (radius || 2);
       },
 
-      // --- main loop hook ---
       onUpdate: function (fn) {
         if (state.mode !== 'play') return;
         var running = true;
         function loop() {
           if (!running || state.mode !== 'play') return;
           var d = 0.016 * (state.script.timeScale || 1);
-          // process waiters
           for (var i = state.script.waiters.length - 1; i >= 0; i--) {
             var w = state.script.waiters[i];
             if (w.done) { state.script.waiters.splice(i, 1); continue; }
@@ -2720,9 +2595,7 @@
         activeScriptCleanups.push(function () { running = false; });
       },
 
-      // --- sequence helper for cutscenes ---
       sequence: function (steps) {
-        // steps: [ { wait: 1 }, { fn: function(){} }, { subtitle: '...' }, { camera: {...} }, ... ]
         var self = this;
         var i = 0;
         function next() {
@@ -2785,7 +2658,6 @@
     level.scripts.forEach(function (s) {
       if (!s.content) return;
       try {
-        // Scripts receive GameAPI; they should no-op if not in play
         var fn = new Function('Game', '"use strict";\n' + s.content);
         fn(GameAPI);
       } catch (err) {
@@ -2797,11 +2669,9 @@
 
 
   function showScreen(name) {
-    // Stop any running scripts when leaving play mode
     if (state.mode === 'play' && name !== 'play') {
       if (typeof stopAllScripts === 'function') stopAllScripts();
     }
-    // Hide ALL menu overlays
     mainMenu.classList.add('hidden');
     lobbyScreen.classList.add('hidden');
     buildUI.classList.add('hidden');
@@ -2828,7 +2698,6 @@
       mainMenu.classList.remove('hidden');
       try { clearLobbyPreviews && clearLobbyPreviews(); } catch (e) {}
     } else if (name === 'lobby') {
-      // Do NOT reset player2Joined here — callers set it intentionally
       lobbyScreen.classList.remove('hidden');
       if (lobbyScreen) lobbyScreen.classList.remove('online-lobby');
       if (state.playType === 'online') {
@@ -2883,7 +2752,6 @@
         return;
       }
     }
-    // Apply customization from UI
     try {
       if (typeof readCustomFromUI === 'function') {
         if (state.playType === 'online') {
@@ -2903,7 +2771,6 @@
     var levelId = '';
     var sel = document.getElementById('lobby-level-select');
     if (sel) levelId = sel.value || '';
-    // Save respawns from markers before loading into play (if still in build)
     if (state.currentLevelId && state.levels[state.currentLevelId]) {
       saveRespawnsFromMarkers();
     }
@@ -2911,14 +2778,12 @@
       state.currentLevelId = levelId;
       loadLevelIntoScene(levelId);
     } else clearBuildObjects();
-    // Hide respawn markers during play (build-only visuals)
     clearRespawnMarkers();
 
     if (lobbyScreen) lobbyScreen.classList.remove('online-lobby');
 
     if (state.playType === 'online') {
       setupPlayersForNet();
-      // force next pose to include clothes so remotes get appearance
       state._lastSentCustomKey = null;
     } else {
       setupPlayers();
@@ -2940,7 +2805,6 @@
       }
       else broadcastToAll(startMsg);
     }
-    // send first poses quickly after start
     if (state.playType === 'online') {
       setTimeout(function () { try { sendMyPose(); } catch (e) {} }, 100);
       setTimeout(function () { try { sendMyPose(); } catch (e) {} }, 400);
@@ -2959,7 +2823,6 @@
     }
     if (e.code === 'Escape') {
       if (state.mode === 'build') {
-        // save and go menu
         if (state.currentLevelId && state.levels[state.currentLevelId]) {
           state.levels[state.currentLevelId].objects = serializeObjects();
           saveRespawnsFromMarkers();
@@ -2971,7 +2834,6 @@
       } else if (state.mode === 'lobby') {
         showScreen('menu');
       }
-      // play mode Escape handled by pause listener (capture)
     }
     if (e.code === 'ControlLeft' || e.code === 'ControlRight') {
       if (state.mode === 'build') { e.preventDefault(); toggleFlyMode(); }
@@ -2988,14 +2850,12 @@
   window.addEventListener('mousemove', function (e) {
     if (state.mode === 'build' && state.flyMode) {
       state.flyYaw -= e.movementX * state.mouseSens;
-      // Mouse up = look up (fixed invert)
-      state.flyPitch -= e.movementY * (state.mouseSens * 0.8); // mouse up = look up
+      state.flyPitch -= e.movementY * (state.mouseSens * 0.8);
       state.flyPitch = Math.max(-1.2, Math.min(1.2, state.flyPitch));
     } else if (state.mode === 'build') {
       onBuildMove(e);
     }
     if (state.mode === 'play' && players[0].group && (state.mouseHidden || document.pointerLockElement === canvas)) {
-      // Only pause P0 movement when P0 has menu; still block look if P0 paused
       if (state.paused && state.pauseOwner === 0) return;
       var sens0 = 0.0005 * (players[0].settings.sens || 5);
       players[0].yaw -= e.movementX * sens0;
@@ -3054,7 +2914,6 @@
   }, true);
   window.addEventListener('click', function (e) {
     if (state.mode === 'build' && !state.flyMode) {
-      // If we just finished a gizmo drag, ignore the click selection
       if (state._gizmoJustDragged) {
         state._gizmoJustDragged = false;
         return;
@@ -3080,7 +2939,7 @@
   var moveModeObj = null;
   var selectedBuildObj = null;
   var isDraggingObj = false;
-  var objToolMode = null; // move | rotate | scale
+  var objToolMode = null;
   var dragOffset = new THREE.Vector3();
   var originalMaterials = [];
 
@@ -3106,7 +2965,6 @@
       if (child.isMesh && child.material) {
         var mats = Array.isArray(child.material) ? child.material : [child.material];
         mats.forEach(function (m) {
-          // clone material so we don't affect other instances
           var cloned = m.clone();
           child.material = Array.isArray(child.material) ? child.material.map(function (mm) { return mm === m ? cloned : mm; }) : cloned;
           saved.push({
@@ -3129,7 +2987,7 @@
 
   // ===== Transform Gizmo (move / scale axes) =====
   var transformGizmo = null;
-  var gizmoDrag = null; // { axis, mode, startMouse, startPos, startScale }
+  var gizmoDrag = null;
   var gizmoHoverAxis = null;
 
   function makeAxisArrow(color, axis) {
@@ -3162,7 +3020,6 @@
     head.userData.isGizmo = true;
     g.add(shaft);
     g.add(head);
-    // fat invisible collider so mouse easy to grab
     var pickMat = new THREE.MeshBasicMaterial({ visible: false });
     var pick = new THREE.Mesh(new THREE.CylinderGeometry(0.45, 0.45, 2.2, 8), pickMat);
     pick.rotation.copy(shaft.rotation);
@@ -3230,7 +3087,6 @@
       root.add(makeAxisArrow(0x33ff66, 'y'));
       root.add(makeAxisArrow(0x3388ff, 'z'));
     } else {
-      // scale
       root.add(makeScaleHandle(0xff3333, 'x'));
       root.add(makeScaleHandle(0x33ff66, 'y'));
       root.add(makeScaleHandle(0x3388ff, 'z'));
@@ -3243,7 +3099,6 @@
   function syncGizmoTransform() {
     if (!transformGizmo || !selectedBuildObj) return;
     transformGizmo.position.copy(selectedBuildObj.position);
-    // keep gizmo readable size relative to camera distance
     var dist = buildCamera.position.distanceTo(selectedBuildObj.position);
     var s = Math.max(0.85, Math.min(3.2, dist * 0.1));
     transformGizmo.scale.set(s, s, s);
@@ -3253,7 +3108,6 @@
     if (!transformGizmo) return null;
     var hits = raycaster.intersectObject(transformGizmo, true);
     if (!hits.length) return null;
-    // nearest hit with axis
     for (var i = 0; i < hits.length; i++) {
       var o = hits[i].object;
       var guard = 0;
@@ -3273,13 +3127,11 @@
       child.traverse(function (c) {
         if (!c.isMesh || !c.material || c.material.visible === false) return;
         if (c.userData && c.userData.isGizmo && c.material.color) {
-          // restore base color from axis
           var base = ax === 'x' ? 0xff3333 : (ax === 'y' ? 0x33ff66 : 0x3388ff);
           if (active) {
             c.material.color.setHex(0xffffff);
             c.material.opacity = 1;
             if (c.geometry && c.geometry.type === 'CylinderGeometry') {
-              // thicken shaft slightly via scale
               c.scale.set(1.55, 1, 1.55);
             } else if (c.geometry && (c.geometry.type === 'ConeGeometry' || c.geometry.type === 'BoxGeometry')) {
               c.scale.set(1.35, 1.35, 1.35);
@@ -3319,7 +3171,6 @@
     var tb = document.getElementById('obj-toolbar');
     if (!tb || !obj) return;
     tb.classList.remove('hidden');
-    // position above object in screen space
     updateObjToolbarPos();
     tb.querySelectorAll('button').forEach(function (b) {
       b.classList.toggle('active', b.getAttribute('data-action') === objToolMode);
@@ -3407,7 +3258,6 @@
     var list = document.getElementById('hierarchy-list');
     if (!list) return;
     list.innerHTML = '';
-    // Group by buildId
     var groups = {};
     state.buildObjects.forEach(function (obj, idx) {
       var id = obj.userData.buildId || 'unknown';
@@ -3443,7 +3293,6 @@
           e.stopPropagation();
           selectedHierarchyObj = entry.obj;
           showContextMenu(e.clientX, e.clientY, item);
-          // Don't full refresh - keep menu open; just mark selected visually
           document.querySelectorAll('.hierarchy-item.selected').forEach(function (el) { el.classList.remove('selected'); });
           item.classList.add('selected');
         };
@@ -3469,12 +3318,10 @@
     if (title && selectedHierarchyObj) {
       title.textContent = selectedHierarchyObj.userData.instanceName || selectedHierarchyObj.userData.buildId || 'كائن';
     }
-    // Mark active item
     document.querySelectorAll('.hierarchy-item.ctx-active').forEach(function (el) { el.classList.remove('ctx-active'); });
     if (anchorEl) anchorEl.classList.add('ctx-active');
 
     menu.classList.remove('hidden');
-    // Position next to the item
     if (anchorEl) {
       var rect = anchorEl.getBoundingClientRect();
       var menuW = 160;
@@ -3495,7 +3342,6 @@
     document.querySelectorAll('.hierarchy-item.ctx-active').forEach(function (el) { el.classList.remove('ctx-active'); });
   }
 
-  // Close only when clicking outside menu and hierarchy
   document.addEventListener('click', function (e) {
     var menu = document.getElementById('context-menu');
     if (!menu || menu.classList.contains('hidden')) return;
@@ -3504,7 +3350,6 @@
     hideContextMenu();
   });
 
-  // Context menu actions - bind after DOM ready in init
   function highlightObject(obj, durationMs) {
     if (!obj) return;
     var originals = [];
@@ -3547,7 +3392,6 @@
     if (gt) gt.onclick = function (e) {
       e.stopPropagation();
       if (!selectedHierarchyObj) return;
-      // انتقال للكاميرا فقط — بدون تفعيل تحريك العنصر
       focusOnObject(selectedHierarchyObj);
       hideContextMenu();
       toast('انتقلت بالكاميرا للعنصر', 'info');
@@ -3591,7 +3435,6 @@
     var ref = document.getElementById('btn-refresh-hierarchy');
     if (ref) ref.onclick = refreshHierarchy;
 
-    // Prevent menu from closing when clicking inside it
     var menu = document.getElementById('context-menu');
     if (menu) {
       menu.addEventListener('click', function (e) { e.stopPropagation(); });
@@ -3599,7 +3442,6 @@
     }
   }
 
-  // Patch onBuildClick for move mode
   var _origOnBuildClick = null;
 
   // ===== CUSTOMIZATION =====
@@ -3636,7 +3478,6 @@
       var s = document.getElementById(map[k]); if (s) s.value = c[k];
       var col = document.getElementById(cmap[k]); if (col) col.value = c['color' + k.charAt(0).toUpperCase() + k.slice(1)] || c['color' + k[0].toUpperCase() + k.slice(1)];
     });
-    // fix color keys
     if (document.getElementById('color-hat')) document.getElementById('color-hat').value = c.colorHat;
     if (document.getElementById('color-glasses')) document.getElementById('color-glasses').value = c.colorGlasses;
     if (document.getElementById('color-shirt')) document.getElementById('color-shirt').value = c.colorShirt;
@@ -3673,7 +3514,6 @@
         if (state.playType === 'split') {
           idx = parseInt(document.getElementById('custom-player-select').value) || 0;
         }
-        // Online: always only own clothes (slot 0)
         readCustomFromUI(idx);
         if (state.playType === 'online' && state.myNetId && typeof playerCustom !== 'undefined') {
           var msg = { type: 'custom', id: state.myNetId, custom: JSON.parse(JSON.stringify(playerCustom[0])), name: state.playerName };
@@ -3685,7 +3525,6 @@
           if (state.useLan) lanSend(msg);
           else if (state.isHost) broadcastToAll(msg);
           else if (state.connection) try { state.connection.send(msg); } catch (e) {}
-          // حدّث صورتي فوراً عندي كمان
           try { refreshLobbyPreviews(); } catch (e) {}
         } else {
           try { refreshLobbyPreviews(); } catch (e) {}
@@ -3735,7 +3574,6 @@
     leaveOnlineSession(false);
   };
 
-  // Notify others if tab closes mid-game
   window.addEventListener('beforeunload', function () {
     if (state.playType === 'online' && state.myNetId && state.useLan) {
       try {
@@ -3858,7 +3696,6 @@
     }
   });
 
-  // Shared cutscene camera (created once)
   var cutsceneCamera = new THREE.PerspectiveCamera(50, window.innerWidth / window.innerHeight, 0.1, 500);
 
   function animate() {
@@ -3867,7 +3704,6 @@
     var delta = rawDelta * (state.script.timeScale || 1);
     var gpInput = pollGamepad();
 
-    // FPS counter
     state._fpsFrames = (state._fpsFrames || 0) + 1;
     state._fpsAcc = (state._fpsAcc || 0) + rawDelta;
     if (state._fpsAcc >= 0.4) {
@@ -3893,10 +3729,8 @@
     }
 
     if (state.mode === 'play') {
-      // Per-player pause: only freeze the player who opened the menu
       var p0Paused = state.paused && (state.pauseOwner === 0 || state.pauseOwner === null && state.playType !== 'split');
       var p1Paused = state.paused && (state.pauseOwner === 1 || state.pauseOwner === null && state.playType !== 'split');
-      // Full pause (online / both) freezes everyone
       if (state.paused && state.playType !== 'split') { p0Paused = true; p1Paused = true; }
 
       if (!p0Paused) {
@@ -3905,7 +3739,6 @@
           jump: state.keys['Space'], run: state.keys['KeyF']
         });
       }
-      // Split only: local player 2 via gamepad. Online: everyone is players[0] on their device
       if (state.playType === 'split' && !p1Paused && gpInput) {
         var gpScale = 0.008 * (players[1].settings.sens || 5);
         gpInput.lookX = (gpInput.lookX || 0) * (gpScale / 0.04);
@@ -3914,11 +3747,9 @@
       if (state.paused && state.pauseOwner === 1) {
         handleGamepadMenuNav(gpInput, rawDelta);
       }
-      // Network pose sync — PeerJS ~30Hz, LAN WebSocket fixed ~33Hz (no adaptive lag feedback)
       if (state.playType === 'online') {
         updateRemoteMeshes(delta);
         state.netPoseTimer = (state.netPoseTimer || 0) + rawDelta;
-        // LAN: always high rate. Adaptive slowdown was causing spike feedback loops.
         var poseInterval = state.useLan ? 0.03 : 0.033;
         if (state.netPoseTimer >= poseInterval) {
           state.netPoseTimer = 0;
@@ -3926,7 +3757,6 @@
         }
       }
 
-      // Cutscene: full-screen cinematic camera
       if (state.script.cutscene && state.script.cutsceneCam) {
         var cc = state.script.cutsceneCam;
         var lerp = cc.lerp != null ? cc.lerp : 0.08;
@@ -3936,7 +3766,6 @@
         cutsceneCamera.position.lerp(new THREE.Vector3(cc.x, cc.y, cc.z), lerp);
         if (cc.lookX != null) {
           var lookTarget = new THREE.Vector3(cc.lookX, cc.lookY, cc.lookZ);
-          // smooth look
           if (!cutsceneCamera.userData._look) cutsceneCamera.userData._look = lookTarget.clone();
           cutsceneCamera.userData._look.lerp(lookTarget, lerp);
           cutsceneCamera.lookAt(cutsceneCamera.userData._look);
@@ -3958,12 +3787,10 @@
         updatePlayerCamera(players[0]);
         updatePlayerCamera(players[1]);
         var w = window.innerWidth, h = window.innerHeight, half = Math.floor(w / 2);
-        // P1 camera: hide own name, show P2
         setNameTagVisible(players[0].group, false);
         setNameTagVisible(players[1].group, true);
         renderer.setViewport(0, 0, half, h); renderer.setScissor(0, 0, half, h);
         renderer.render(scene, players[0].camera);
-        // P2 camera: hide own name, show P1
         setNameTagVisible(players[0].group, true);
         setNameTagVisible(players[1].group, false);
         renderer.setViewport(half, 0, w - half, h); renderer.setScissor(half, 0, w - half, h);
@@ -3987,7 +3814,6 @@
   
   // ===== LEVEL SYNC OVER LAN =====
   function serializeAllLevels() {
-    // Save current level first
     if (state.currentLevelId && state.levels[state.currentLevelId]) {
       state.levels[state.currentLevelId].objects = serializeObjects();
     }
@@ -3998,7 +3824,6 @@
         name: lv.name,
         objects: lv.objects || [],
         scripts: (lv.scripts || []).map(function (s) { return { name: s.name, content: s.content }; }),
-        // sounds can be large — still send (dataUrls)
         sounds: (lv.sounds || []).map(function (s) { return { name: s.name, dataUrl: s.dataUrl, type: s.type }; }),
         createdAt: lv.createdAt
       };
@@ -4036,14 +3861,10 @@
   
   // ===== Pure LAN bus (no internet) via lan_host.py on host machine =====
   function sameOriginLanHost() {
-    // When game is opened from lan_host (local or Render/cloud), use that origin
     try {
       if (typeof location !== 'undefined' && location.protocol && location.protocol.indexOf('http') === 0) {
         var port = location.port || '';
-        // local default port, or any http(s) origin when served by our host (cloud = 443/empty port)
-        if (port === String(state.lanPort || 27100) || port === '27100' || port === '' || port === '443' || port === '80') {
-          // only treat as LAN host if we are not on a random static host without our API
-          // cloud/render: same origin is always correct when index is served by lan_host
+        if (port === String(state.lanPort || 27100) || port === '27100') {
           return location.origin.replace(/\/$/, '');
         }
       }
@@ -4053,29 +3874,33 @@
 
   function normalizeLanHost(raw) {
     var s = (raw || '').trim();
+    
+    // ✅ جديد: إذا كان الخادم السحابي مفعلاً، استخدم الرابط السحابي
+    if (state.useCloudServer) {
+      return state.cloudServerUrl;
+    }
+    
     if (!s) {
       var so0 = sameOriginLanHost();
       if (so0) return so0;
       return 'http://127.0.0.1:27100';
     }
-    // Full URL already
     if (/^https?:\/\//i.test(s)) {
       return s.replace(/\/$/, '');
     }
-    // host:port
     if (s.indexOf(':') !== -1 && s.indexOf('/') === -1) {
       return 'http://' + s;
     }
-    // bare domain/tunnel hostname (no port) — use as https if looks public, else http + default port
     if (/^[a-z0-9.-]+\.[a-z]{2,}$/i.test(s) && !/^\d+\.\d+\.\d+\.\d+$/.test(s)) {
-      // try cloudflare / ngrok style hostnames
       return 'https://' + s.replace(/\/$/, '');
     }
-    // plain IP
     return 'http://' + s + ':' + (state.lanPort || 27100);
   }
 
   function lanBaseUrl() {
+    if (state.useCloudServer) {
+      return state.cloudServerUrl;
+    }
     if (state.lanIp) return normalizeLanHost(state.lanIp);
     var so = sameOriginLanHost();
     if (so) return so;
@@ -4083,7 +3908,11 @@
   }
 
   function lanWsUrl() {
-    var base = lanBaseUrl(); // http://ip:port
+    if (state.useCloudServer) {
+      var wsUrl = state.cloudServerUrl.replace(/^https?/, 'ws');
+      return wsUrl + '/ws';
+    }
+    var base = lanBaseUrl();
     if (base.indexOf('https://') === 0) return 'wss://' + base.slice(8) + '/ws';
     if (base.indexOf('http://') === 0) return 'ws://' + base.slice(7) + '/ws';
     return 'ws://' + base.replace(/^\/\//, '') + '/ws';
@@ -4124,21 +3953,19 @@
   }
 
   function lanSend(data) {
-    if (!state.useLan || !state.roomCode) return;
-    // WebSocket path: single persistent connection — instant send
+    if (!state.useLan && !state.useCloudServer) return;
+    if (!state.roomCode) return;
+    
     if (state._lanWs && state._lanWs.readyState === 1) {
       try {
-        // coalesce poses: latest wins — never queue multiple poses
         if (data && data.type === 'pose') {
           state._pendingPose = null;
         }
         state._lanWs.send(JSON.stringify({ room: state.roomCode, data: data }));
         return;
       } catch (e) {
-        // fall through to HTTP
       }
     }
-    // HTTP fallback (reconnect window / no WS yet)
     if (data && data.type === 'pose') {
       state._pendingPose = data;
     }
@@ -4172,7 +3999,7 @@
     var bars = document.getElementById('wifi-bars');
     var label = document.getElementById('ping-ms');
     if (!hud || !bars || !label) return;
-    if (!(state.playType === 'online' && state.useLan && state._lanPollActive)) {
+    if (!(state.playType === 'online' && (state.useLan || state.useCloudServer) && state._lanPollActive)) {
       hud.classList.add('hidden');
       return;
     }
@@ -4206,7 +4033,6 @@
       if (j.c != null) {
         var sample = (typeof performance !== 'undefined' && performance.now ? performance.now() : Date.now()) - j.c;
         if (sample > 0 && sample < 2000) {
-          // Fast EMA; spikes decay quickly so HUD doesn't stick high
           var prev = state.netPing || sample;
           var alpha = sample > prev * 1.8 ? 0.15 : 0.55;
           state.netPing = prev * (1 - alpha) + sample * alpha;
@@ -4220,7 +4046,6 @@
       state._lanWsReady = true;
       state._lanDeadStreak = 0;
       state._lanMissingStreak = 0;
-      // apply snapshot
       if (j.poses && j.poses.length) {
         j.poses.forEach(function (m) {
           if (!m || !m.data) return;
@@ -4241,7 +4066,6 @@
           handlePeerData(d, !!state.isHost, null);
         });
       }
-      // flush pending pose
       if (state._pendingPose) {
         var pp = state._pendingPose;
         state._pendingPose = null;
@@ -4280,7 +4104,8 @@
   }
 
   function lanConnectWs() {
-    if (!state.useLan || !state.roomCode || !state._lanPollActive) return;
+    if (!state.useLan && !state.useCloudServer) return;
+    if (!state.roomCode || !state._lanPollActive) return;
     if (state._lanWs && (state._lanWs.readyState === 0 || state._lanWs.readyState === 1)) return;
 
     var url = lanWsUrl();
@@ -4288,7 +4113,6 @@
     try {
       ws = new WebSocket(url);
     } catch (e) {
-      // WS unavailable — fall back to HTTP poll loop
       state.lanPollTimer = setTimeout(lanPollOnceHttp, 80);
       return;
     }
@@ -4296,7 +4120,7 @@
     state._lanWsReady = false;
 
     ws.onopen = function () {
-      state._lanWsReady = true; // allow sends immediately; hello still refreshes roster
+      state._lanWsReady = true;
       try { ws.binaryType = 'arraybuffer'; } catch (e) {}
       try {
         ws.send(JSON.stringify({
@@ -4308,7 +4132,6 @@
           isHost: !!state.isHost
         }));
       } catch (e) {}
-      // latency probe
       if (state._lanPingTimer) clearInterval(state._lanPingTimer);
       state._lanPingTimer = setInterval(function () {
         if (!state._lanWs || state._lanWs.readyState !== 1) return;
@@ -4317,7 +4140,6 @@
           state._lanWs.send(JSON.stringify({ type: 'ping', t: t0 }));
         } catch (e) {}
       }, 1000);
-      // host heartbeat
       if (state._lanBeatTimer) clearInterval(state._lanBeatTimer);
       state._lanBeatTimer = setInterval(function () {
         if (!state.isHost || !state._lanPollActive) return;
@@ -4342,22 +4164,20 @@
       state._lanWsReady = false;
       state._lanWs = null;
       if (state._lanPingTimer) { clearInterval(state._lanPingTimer); state._lanPingTimer = null; }
-      if (!state._lanPollActive || !state.useLan) return;
-      // auto-reconnect
+      if (!state._lanPollActive || (!state.useLan && !state.useCloudServer)) return;
       state.lanPollTimer = setTimeout(function () {
-        if (state._lanPollActive && state.useLan) lanConnectWs();
+        if (state._lanPollActive && (state.useLan || state.useCloudServer)) lanConnectWs();
       }, 400);
     };
 
     ws.onerror = function () {
-      // onclose will handle reconnect
     };
   }
 
-  // HTTP poll kept only as emergency fallback when WS fails entirely
   function lanPollOnceHttp() {
-    if (!state.useLan || !state.roomCode || !state._lanPollActive) return;
-    if (state._lanWs && state._lanWs.readyState === 1) return; // WS is up
+    if (!state.useLan && !state.useCloudServer) return;
+    if (!state.roomCode || !state._lanPollActive) return;
+    if (state._lanWs && state._lanWs.readyState === 1) return;
     if (state._lanPollInflight) return;
     state._lanPollInflight = true;
     var url = lanBaseUrl() + '/poll?room=' + encodeURIComponent(state.roomCode) + '&since=' + (state.lanSince || 0);
@@ -4402,13 +4222,11 @@
     state._pendingPose = null;
     state._lanPollActive = true;
     state._lanWsReady = false;
-    // Prefer WebSocket — zero polling lag on LAN
     lanConnectWs();
   }
 
-  // Tab visible again → ensure WS is alive
   document.addEventListener('visibilitychange', function () {
-    if (!document.hidden && state.useLan && state._lanPollActive) {
+    if (!document.hidden && (state.useLan || state.useCloudServer) && state._lanPollActive) {
       if (!state._lanWs || state._lanWs.readyState > 1) {
         lanConnectWs();
       }
@@ -4419,7 +4237,7 @@
   });
 
   function lanCheckHost(ip, cb) {
-    var url = 'http://' + ip + ':' + (state.lanPort || 27100) + '/status';
+    var url = normalizeLanHost(ip) + '/status';
     fetch(url, { cache: 'no-cache' }).then(function (r) { return r.json(); }).then(function (j) {
       cb(!!(j && j.ok), j);
     }).catch(function () { cb(false, null); });
@@ -4446,12 +4264,11 @@
     if (state.playType === 'online' && myId) {
       var leaveMsg = { type: 'leave', id: myId, name: myName, isHost: wasHost };
       try {
-        if (state.useLan) lanSend(leaveMsg);
+        if (state.useLan || state.useCloudServer) lanSend(leaveMsg);
         else if (wasHost) broadcastToAll(leaveMsg);
         else if (state.connection) state.connection.send(leaveMsg);
       } catch (e) {}
-      // Host closes the room on the LAN server so it disappears from the network list
-      if (wasHost && state.useLan && state.roomCode) {
+      if (wasHost && (state.useLan || state.useCloudServer) && state.roomCode) {
         try {
           fetch(lanBaseUrl() + '/roommeta', {
             method: 'POST',
@@ -4460,11 +4277,10 @@
           });
         } catch (e) {}
       }
-      // Host also tells everyone explicitly to go menu
       if (wasHost) {
         var closeMsg = { type: 'room_closed', by: myName };
         try {
-          if (state.useLan) lanSend(closeMsg);
+          if (state.useLan || state.useCloudServer) lanSend(closeMsg);
           else broadcastToAll(closeMsg);
         } catch (e) {}
       }
@@ -4536,7 +4352,6 @@
     var r = getLobbyPortraitRenderer();
     if (!r || !state._lobbyPortraitScene) return;
     var sc = state._lobbyPortraitScene;
-    // clear old character
     var toRemove = [];
     sc.children.forEach(function (ch) {
       if (ch.isLight) return;
@@ -4551,7 +4366,7 @@
     } catch (e) {}
     var mesh = createCharacterMesh(shirt, 0xe0ac69, custom || null);
     mesh.position.set(0, 0, 0);
-    mesh.rotation.y = 0; // face camera
+    mesh.rotation.y = 0;
     sc.add(mesh);
     r.setSize(canvas.width, canvas.height);
     state._lobbyPortraitCam.aspect = canvas.width / canvas.height;
@@ -4605,7 +4420,6 @@
         custom: (typeof playerCustom !== 'undefined' ? playerCustom[0] : null)
       }];
     }
-    // sync local custom onto roster
     roster.forEach(function (r) {
       if (r.id === state.myNetId && typeof playerCustom !== 'undefined') {
         r.custom = playerCustom[0];
@@ -4617,7 +4431,6 @@
     roster.forEach(function (p, i) {
       var isMe = p.id === state.myNetId;
       var card = buildPortraitCard(p, isMe);
-      // زوجي يسار / فردي يمين — توزيع متوازن
       if (i % 2 === 0) L.appendChild(card);
       else R.appendChild(card);
     });
@@ -4647,7 +4460,6 @@
         '<div class="player-info">' +
         '<span class="name">' + nameStr + '</span>' +
         '<span class="status online">READY ✓</span></div>';
-      // Host can kick others
       if (state.isHost && !p.isHost && p.id !== state.myNetId) {
         var kickBtn = document.createElement('button');
         kickBtn.className = 'btn-kick';
@@ -4674,11 +4486,9 @@
 
   function kickPlayer(targetId, targetName) {
     if (!state.isHost || !targetId) return;
-    // Notify everyone
     var msg = { type: 'kick', id: targetId };
-    if (state.useLan) lanSend(msg);
+    if (state.useLan || state.useCloudServer) lanSend(msg);
     else broadcastToAll(msg);
-    // Close peer connection if any
     if (state.connections) {
       state.connections.forEach(function (c) {
         if (c._netId === targetId) {
@@ -4688,7 +4498,6 @@
       });
       state.connections = state.connections.filter(function (c) { return c._netId !== targetId; });
     }
-    // Remove from roster locally
     state.netRoster = (state.netRoster || []).filter(function (r) { return r.id !== targetId; });
     if (state.remoteMeshes[targetId]) {
       scene.remove(state.remoteMeshes[targetId]);
@@ -4754,14 +4563,12 @@
     if (!state.remoteTargets) state.remoteTargets = {};
     var prev = state.remoteTargets[d.id];
     var nowT = (typeof performance !== 'undefined' && performance.now) ? performance.now() : Date.now();
-    // velocity from message or estimate from previous target
     var vx = (d.vx != null) ? d.vx : 0;
     var vz = (d.vz != null) ? d.vz : 0;
     if (prev && prev._t) {
       var dt = Math.max(0.016, (nowT - prev._t) / 1000);
-      if (d.vx == null) vx = (d.x - prev.x) / dt;
-      if (d.vz == null) vz = (d.z - prev.z) / dt;
-      // clamp crazy spikes from lag spikes
+      if (d.vx == null) vx = (prev.x - d.x) / dt;
+      if (d.vz == null) vz = (prev.z - d.z) / dt;
       var spd = Math.sqrt(vx * vx + vz * vz);
       if (spd > 25) { vx *= 25 / spd; vz *= 25 / spd; }
     }
@@ -4773,11 +4580,9 @@
       _t: nowT,
       inVehicle: !!d.inVehicle,
       vehicleName: d.vehicleName || null,
-      vehicleSeat: d.vehicleSeat || 'driver',
       vehicleX: d.vehicleX, vehicleY: d.vehicleY, vehicleZ: d.vehicleZ,
       vehicleYaw: d.vehicleYaw
     };
-    // Sync remote vehicle transform (build objects + script-spawned)
     if (d.inVehicle) {
       var vMesh = null;
       if (d.vehicleName) {
@@ -4793,7 +4598,6 @@
         }
       }
       if (!vMesh && d.vehicleX != null) {
-        // fallback: nearest vehicle to reported pos
         var bestD = 12, best = null;
         for (var j = 0; j < state.buildObjects.length; j++) {
           var vo = state.buildObjects[j];
@@ -4811,24 +4615,16 @@
           vMesh.position.z = d.vehicleZ;
         }
         if (d.vehicleYaw != null) vMesh.rotation.y = d.vehicleYaw;
-        // seat remote player on correct seat offset
-        var seatOff = { x: -0.5, y: 0.85, z: 0.35 };
-        var vs = d.vehicleSeat || 'driver';
-        if (vs === 'front' || vs === 'passenger') seatOff = { x: 0.5, y: 0.85, z: 0.35 };
-        else if (vs === 'rear_l') seatOff = { x: -0.5, y: 0.85, z: -0.6 };
-        else if (vs === 'rear_r') seatOff = { x: 0.5, y: 0.85, z: -0.6 };
-        var cy = Math.cos(vMesh.rotation.y), sy = Math.sin(vMesh.rotation.y);
-        mesh.position.x = vMesh.position.x + seatOff.x * cy - seatOff.z * sy;
-        mesh.position.y = (vMesh.position.y || 0) + seatOff.y;
-        mesh.position.z = vMesh.position.z + seatOff.x * sy + seatOff.z * cy;
-        mesh.rotation.y = vMesh.rotation.y + Math.PI;
+        mesh.position.x = vMesh.position.x;
+        mesh.position.y = (vMesh.position.y || 0) + 0.9;
+        mesh.position.z = vMesh.position.z;
+        mesh.rotation.y = (d.yaw || 0) + Math.PI;
         state.remoteTargets[d.id].x = mesh.position.x;
         state.remoteTargets[d.id].y = mesh.position.y;
         state.remoteTargets[d.id].z = mesh.position.z;
         vMesh.userData.drivenByNet = d.id;
       }
     } else {
-      // clear driven flag if any
       for (var k = 0; k < state.buildObjects.length; k++) {
         var vk = state.buildObjects[k];
         if (vk && vk.userData && vk.userData.drivenByNet === d.id) vk.userData.drivenByNet = null;
@@ -4840,19 +4636,16 @@
     if (!state.remoteTargets) return;
     var ids = Object.keys(state.remoteTargets);
     var ping = state.netPing || 100;
-    // With high ping, blend slower + extrapolate more so motion stays smooth
     var lagSec = Math.min(0.8, (ping / 1000) * 0.45);
     var followRate = ping > 400 ? 8 : (ping > 200 ? 14 : 22);
-    var snapDist2 = ping > 400 ? 36 : 16; // only snap if very far
+    var snapDist2 = ping > 400 ? 36 : 16;
     var nowT = (typeof performance !== 'undefined' && performance.now) ? performance.now() : Date.now();
     for (var i = 0; i < ids.length; i++) {
       var id = ids[i];
       var mesh = state.remoteMeshes[id];
       var t = state.remoteTargets[id];
       if (!mesh || !t) continue;
-      // Extrapolate target forward using velocity (dead reckoning)
       var age = t._t ? Math.min(1.4, (nowT - t._t) / 1000) : 0;
-      // damp velocity over time so we don't fly forever on stale data
       var damp = age > 0.5 ? Math.max(0.15, 1 - (age - 0.5) * 1.2) : 1;
       var ex = t.x + (t.vx || 0) * (age * damp + lagSec * 0.55);
       var ey = t.y;
@@ -4862,7 +4655,6 @@
       var dz = ez - mesh.position.z;
       var dist2 = dx * dx + dy * dy + dz * dz;
       if (dist2 > snapDist2) {
-        // soft catch-up instead of hard teleport when laggy
         var catchUp = Math.min(1, 0.35);
         mesh.position.x += dx * catchUp;
         mesh.position.y += dy * catchUp;
@@ -4873,7 +4665,6 @@
         mesh.position.y += dy * Math.min(1, (followRate + 10) * delta);
         mesh.position.z += dz * lerp;
       }
-      // If remote is in a synced vehicle, lock them to the correct seat (driver / passenger)
       if (t.inVehicle) {
         var seated = false;
         if (t.vehicleName) {
@@ -4886,36 +4677,15 @@
                 vv.position.z = t.vehicleZ;
               }
               if (t.vehicleYaw != null) vv.rotation.y = t.vehicleYaw;
-              // seat offsets (match level1 cars)
-              var seatOff = { x: -0.5, y: 0.85, z: 0.35 }; // driver default
-              var vs = (t.vehicleSeat || 'driver');
-              if (vs === 'front' || vs === 'passenger') seatOff = { x: 0.5, y: 0.85, z: 0.35 };
-              else if (vs === 'rear_l') seatOff = { x: -0.5, y: 0.85, z: -0.6 };
-              else if (vs === 'rear_r') seatOff = { x: 0.5, y: 0.85, z: -0.6 };
-              var cy = Math.cos(vv.rotation.y), sy = Math.sin(vv.rotation.y);
-              mesh.position.x = vv.position.x + seatOff.x * cy - seatOff.z * sy;
-              mesh.position.y = (vv.position.y || 0) + seatOff.y;
-              mesh.position.z = vv.position.z + seatOff.x * sy + seatOff.z * cy;
-              mesh.rotation.y = vv.rotation.y + Math.PI;
-              // hide legs while seated
-              if (mesh.userData) {
-                if (mesh.userData.leftLeg) mesh.userData.leftLeg.visible = false;
-                if (mesh.userData.rightLeg) mesh.userData.rightLeg.visible = false;
-              }
+              mesh.position.x = vv.position.x;
+              mesh.position.y = (vv.position.y || 0) + 0.9;
+              mesh.position.z = vv.position.z;
               seated = true;
               break;
             }
           }
         }
         if (seated) {
-          // skip walk anim while seated
-          continue;
-        }
-      } else {
-        // restore legs when not in vehicle
-        if (mesh.userData) {
-          if (mesh.userData.leftLeg) mesh.userData.leftLeg.visible = true;
-          if (mesh.userData.rightLeg) mesh.userData.rightLeg.visible = true;
         }
       }
       var cy = mesh.rotation.y;
@@ -4950,14 +4720,12 @@
     try {
       custom = (typeof playerCustom !== 'undefined') ? playerCustom[0] : null;
     } catch (e) {}
-    // Only attach full custom when it changes (cuts LAN bandwidth a lot)
     var customKey = custom ? JSON.stringify(custom) : '';
     var sendCustom = null;
     if (customKey !== state._lastSentCustomKey) {
       state._lastSentCustomKey = customKey;
       sendCustom = custom;
     }
-    // compact pose + velocity for high-ping extrapolation
     var px = p.group.position.x, py = p.group.position.y, pz = p.group.position.z;
     var prev = state._lastPosePos || { x: px, y: py, z: pz, t: 0 };
     var nowP = (typeof performance !== 'undefined' && performance.now) ? performance.now() : Date.now();
@@ -4977,7 +4745,6 @@
       vz: Math.round(vz * 100) / 100
     };
     if (state.isHost) msg.isHost = true;
-    // name only occasionally (every ~1s) to save bandwidth
     state._nameTick = (state._nameTick || 0) + 1;
     if (state._nameTick === 1 || state._nameTick % 40 === 0) {
       msg.name = state.playerName || 'لاعب';
@@ -4992,22 +4759,7 @@
       msg.vehicleSeat = p.vehicleSeat || 'driver';
     }
     if (sendCustom) msg.custom = sendCustom;
-    // High-ping only: skip tiny movements; good LAN sends everything for max fidelity
-    if (state.useLan && (state.netPing || 0) > 450) {
-      var lp = state._lastSentPose;
-      if (lp) {
-        var ddx = msg.x - lp.x, ddz = msg.z - lp.z;
-        var dyaw = Math.abs((msg.yaw || 0) - (lp.yaw || 0));
-        var minMove = (state.netPing > 800) ? 0.30 : 0.15;
-        if (ddx * ddx + ddz * ddz < minMove * minMove && dyaw < 0.07 && !msg.inVehicle) {
-          state._poseSkip = (state._poseSkip || 0) + 1;
-          if (state._poseSkip < 3) return;
-        }
-      }
-      state._poseSkip = 0;
-      state._lastSentPose = { x: msg.x, z: msg.z, yaw: msg.yaw };
-    }
-    if (state.useLan) {
+    if (state.useLan || state.useCloudServer) {
       lanSend(msg);
     } else if (state.isHost) {
       broadcastToAll(msg);
@@ -5018,7 +4770,6 @@
 
   function handlePeerData(d, isHostSide, fromConn) {
     if (!d || !d.type) return;
-    // NO levels / story data transfer — each device uses its own local comprehensive ZIP
     if (d.type === 'join') {
       if (state.isHost) {
         var newId = d.clientId || ('p_' + Date.now().toString(36) + Math.random().toString(36).slice(2, 5));
@@ -5030,9 +4781,8 @@
         if (!state.netRoster.some(function (r) { return r.isHost; })) {
           state.netRoster.unshift({ id: state.myNetId || 'host', name: state.playerName || 'القائد', isHost: true, custom: (typeof playerCustom !== 'undefined' ? playerCustom[0] : null) });
         }
-        // avoid duplicate join
         if (state.netRoster.some(function (r) { return r.id === newId; })) {
-          if (state.useLan) lanSend({ type: 'welcome', yourId: newId, roster: state.netRoster });
+          if (state.useLan || state.useCloudServer) lanSend({ type: 'welcome', yourId: newId, roster: state.netRoster });
           return;
         }
         if (state.netRoster.length >= state.maxNetPlayers) {
@@ -5040,7 +4790,7 @@
             try { fromConn.send({ type: 'full' }); } catch (e) {}
             try { fromConn.close(); } catch (e) {}
           }
-          if (state.useLan) lanSend({ type: 'full' });
+          if (state.useLan || state.useCloudServer) lanSend({ type: 'full' });
           toast('اللوبية ممتلئة (حد أقصى ' + state.maxNetPlayers + ')', 'error');
           return;
         }
@@ -5053,7 +4803,7 @@
         state.player2Joined = true;
         var welcome = { type: 'welcome', yourId: newId, roster: state.netRoster };
         var rosterMsg = { type: 'roster', roster: state.netRoster };
-        if (state.useLan) {
+        if (state.useLan || state.useCloudServer) {
           lanSend(welcome);
           lanSend(rosterMsg);
         } else {
@@ -5067,8 +4817,6 @@
       }
     }
     if (d.type === 'welcome') {
-      // CRITICAL: host must IGNORE welcome echoes on the LAN bus
-      // otherwise state.myNetId becomes the joiner's id and all pose sync breaks
       if (state.isHost) {
         return;
       }
@@ -5080,7 +4828,6 @@
       document.getElementById('btn-start-game').textContent = 'في انتظار القائد...';
     }
     if (d.type === 'roster') {
-      // Host already has authoritative roster; still allow refresh from self-broadcast is ok
       if (d.roster && d.roster.length) {
         state.netRoster = d.roster;
         renderNetLobbyList();
@@ -5091,7 +4838,6 @@
     }
     if (d.type === 'custom') {
       if (d.id && d.custom) {
-        // update roster custom/name (copy so local edits don't leak)
         if (state.netRoster) {
           state.netRoster.forEach(function (r) {
             if (r.id === d.id) {
@@ -5116,7 +4862,7 @@
         }
         renderNetLobbyList();
       }
-      if (isHostSide && !state.useLan) broadcastToAll(d, fromConn);
+      if (isHostSide && !state.useLan && !state.useCloudServer) broadcastToAll(d, fromConn);
     }
     if (d.type === 'script_net') {
       if (d.id === state.myNetId) return;
@@ -5124,20 +4870,17 @@
       for (var hi = 0; hi < handlers.length; hi++) {
         try { handlers[hi](d.data, d.id); } catch (e) { console.warn(e); }
       }
-      // host rebroadcast to others (non-LAN peer mesh)
-      if (isHostSide && !state.useLan && fromConn) {
+      if (isHostSide && !state.useLan && !state.useCloudServer && fromConn) {
         try { broadcastToAll(d, fromConn); } catch (e) {}
       }
       return;
     }
     if (d.type === 'pose') {
       applyNetPose(d);
-      // PeerJS: host relays. LAN: everyone already sees the bus — no relay
-      if (isHostSide && !state.useLan) broadcastToAll(d, fromConn);
+      if (isHostSide && !state.useLan && !state.useCloudServer) broadcastToAll(d, fromConn);
     }
     if (d.type === 'kick') {
       if (d.id === state.myNetId) {
-        // I was kicked
         toast('تم طردك من اللوبي', 'error');
         stopLanPoll && stopLanPoll();
         if (state.peer) try { state.peer.destroy(); } catch (e) {}
@@ -5149,7 +4892,6 @@
         showUI('main-menu');
         return;
       }
-      // Someone else was kicked
       if (d.id && state.remoteMeshes[d.id]) {
         scene.remove(state.remoteMeshes[d.id]);
         delete state.remoteMeshes[d.id];
@@ -5158,10 +4900,10 @@
         state.netRoster = state.netRoster.filter(function (r) { return r.id !== d.id; });
         renderNetLobbyList();
       }
-      if (isHostSide && !state.useLan) broadcastToAll(d, fromConn);
+      if (isHostSide && !state.useLan && !state.useCloudServer) broadcastToAll(d, fromConn);
     }
     if (d.type === 'start') {
-      if (state.mode === 'play') return; // already started (host)
+      if (state.mode === 'play') return;
       var levelId = d.levelId || '';
       if (levelId && !state.levels[levelId] && d.levelName) {
         Object.keys(state.levels).forEach(function (lid) {
@@ -5176,7 +4918,7 @@
         state.currentLevelId = levelId;
         loadLevelIntoScene(levelId);
       } else clearBuildObjects();
-      clearRespawnMarkers(); // build-only visuals
+      clearRespawnMarkers();
       setupPlayersForNet();
       state._lastSentCustomKey = null;
       showScreen('play');
@@ -5223,7 +4965,6 @@
         renderNetLobbyList();
       }
       toast('خرج اللاعب ' + leftName, 'info');
-      // Host left → everyone out, room gone
       if (leftWasHost) {
         closePause && closePause();
         try { stopAllScripts && stopAllScripts(); } catch (e) {}
@@ -5244,18 +4985,15 @@
   }
 
   function setupPlayersForNet() {
-    // Always control local as players[0]; remotes are separate meshes
     clearRemoteMeshes();
     players.forEach(function (p) { if (p.group) { scene.remove(p.group); p.group = null; } });
     var myCustom = null;
     try {
       if (typeof playerCustom !== 'undefined') {
-        // Everyone uses slot 0 for their own clothes
         myCustom = playerCustom[0];
       }
     } catch (e) {}
     var lanSpawns = getLevelRespawnPoints('lan');
-    // Assign spawn index by roster order
     var myIndex = 0;
     (state.netRoster || []).forEach(function (r, i) {
       if (r.id === state.myNetId) myIndex = i;
@@ -5266,14 +5004,11 @@
     players[0].yaw = 0;
     players[0].velocity.set(0, 0, 0);
     scene.add(players[0].group);
-    // Local name tag exists but hidden for own camera
     attachNameTag(players[0].group, state.playerName || 'أنا', false);
-    // hide unused local p2 in online
     if (players[1].group) { scene.remove(players[1].group); players[1].group = null; }
     var aspect = window.innerWidth / window.innerHeight;
     players[0].camera = new THREE.PerspectiveCamera(70, aspect, 0.1, 400);
     players[1].camera = new THREE.PerspectiveCamera(70, aspect, 0.1, 400);
-    // spawn remote placeholders from roster at their LAN respawn points
     (state.netRoster || []).forEach(function (r, i) {
       if (r.id === state.myNetId) return;
       ensureRemoteMesh(r.id, r.custom, r.name);
@@ -5310,7 +5045,6 @@
     state.player2Joined = false;
     state.netRoster = [];
     clearRemoteMeshes();
-    // restore classic 2-player cards for split
     var list = document.getElementById('players-list');
     var hint = document.getElementById('net-players-hint');
     if (hint) hint.style.display = 'none';
@@ -5374,7 +5108,6 @@
     });
   }
 
-  // Live IP/host detection with clear Arabic messages
   function setIpStatusEl(el, kind, text) {
     if (!el) return;
     el.textContent = text || '';
@@ -5399,7 +5132,7 @@
         if (info && info.ips && info.ips.length) state._detectedLanIps = info.ips;
         state._lastCheckedLanIp = addr;
       } else {
-        setIpStatusEl(el, 'err', '✗ مش واصل — تأكد إن python lan_host.py شغال والعنوان صح (Radmin / LAN)');
+        setIpStatusEl(el, 'err', '✗ مش واصل — تأكد إن الخادم شغال والعنوان صح');
       }
       if (onResult) onResult(ok, info);
     });
@@ -5436,14 +5169,13 @@
         if (okBtn) { okBtn.disabled = false; okBtn.textContent = 'موافق — متابعة'; }
         state._lastCheckedLanIp = ip;
         if (info && info.ips && info.ips.length) state._detectedLanIps = info.ips;
-        // prefill create/join IP fields
         var ci = document.getElementById('create-ip-input');
         var ji = document.getElementById('join-ip-input');
         if (ci) ci.value = ip;
         if (ji) ji.value = ip;
       } else {
         if (st) {
-          st.innerHTML = 'السيرفر مش شغال على ' + ip + ' ❌<br><span style="font-weight:500;font-size:0.85rem">القائد: شغّل python lan_host.py ثم cloudflared tunnel --url http://localhost:27100<br>المنضم: الصق نفس رابط trycloudflare.com أو IP القائد</span>';
+          st.innerHTML = 'السيرفر مش شغال على ' + ip + ' ❌<br><span style="font-weight:500;font-size:0.85rem">القائد: شغّل الخادم (Python/Cloud) ثم تأكد من العنوان</span>';
           st.style.color = '#ff6b8a';
         }
         if (okBtn) { okBtn.disabled = true; okBtn.textContent = 'السيرفر مش شغال بعد'; }
@@ -5453,10 +5185,9 @@
 
   var btnOnline = document.getElementById('btn-online-mode');
   if (btnOnline) btnOnline.onclick = function () {
-    // مباشرة للـ hub — اختيار LAN / كلاودفير داخل إنشاء أو انضمام
     showUI('online-hub');
     var hub = document.getElementById('hub-server-status');
-    if (hub) hub.textContent = 'القائد يشغّل: python lan_host.py — LAN بدون نت أو كلاودفير للإنترنت';
+    if (hub) hub.textContent = 'اختر نوع الخادم: سحابي (إنترنت) أو LAN محلي (بدون نت)';
   };
 
   var btnCheckServer = document.getElementById('btn-check-server');
@@ -5488,8 +5219,8 @@
   var btnOnlineHubBack = document.getElementById('btn-online-hub-back');
   if (btnOnlineHubBack) btnOnlineHubBack.onclick = function () { showUI('story-choice'); };
 
-  // ---- Create room: LAN vs Cloud mode ----
-  state._createNetMode = null; // 'lan' | 'cloud'
+  // ---- Create room: Cloud vs LAN mode ----
+  state._createNetMode = null;
   state._joinNetMode = null;
 
   function setCreateNetMode(mode) {
@@ -5499,7 +5230,6 @@
     var btnLan = document.getElementById('btn-create-mode-lan');
     var btnCloud = document.getElementById('btn-create-mode-cloud');
     var doBtn = document.getElementById('btn-do-create');
-    // Always show exactly one panel when a mode is chosen
     if (lanP) {
       if (mode === 'lan') lanP.classList.remove('hidden');
       else lanP.classList.add('hidden');
@@ -5534,11 +5264,11 @@
       if (hint && state._detectedLanIps && state._detectedLanIps.length) {
         hint.textContent = 'IP جهازك المحتمل: ' + state._detectedLanIps.join(' · ') + ' — أعطِه لصحابك (LAN أو Radmin)';
       }
-      // auto-probe current value
       if (ipEl && ipEl.value) probeServerAndShow(ipEl.value, 'create-ip-status');
     } else if (mode === 'cloud') {
       var cEl = document.getElementById('create-cloud-input');
       if (cEl && cEl.value) probeServerAndShow(cEl.value, 'create-cloud-status');
+      state.useCloudServer = true;
     }
   }
 
@@ -5572,10 +5302,10 @@
     } else if (mode === 'cloud') {
       var jc = document.getElementById('join-cloud-input');
       if (jc && jc.value) probeServerAndShow(jc.value, 'join-cloud-status');
+      state.useCloudServer = true;
     }
   }
 
-  // زر الجرافيكس في القائمة الرئيسية
   var btnMenuGfx = document.getElementById('btn-menu-graphics');
   if (btnMenuGfx) btnMenuGfx.onclick = function () {
     var sel = document.getElementById('set-graphics');
@@ -5593,17 +5323,44 @@
     }
     var sp = document.getElementById('settings-panel');
     if (sp) sp.classList.remove('hidden');
-    // لو مش في pause، رجوع يخفي فقط
   };
 
+  // ✅ أزرار اختيار نوع الخادم في إنشاء اللوبي
   var btnCreateModeLan = document.getElementById('btn-create-mode-lan');
-  if (btnCreateModeLan) btnCreateModeLan.onclick = function () { setCreateNetMode('lan'); };
+  if (btnCreateModeLan) {
+    btnCreateModeLan.onclick = function () {
+      state.useCloudServer = false;
+      setCreateNetMode('lan');
+      toast('تم اختيار LAN المحلي', 'info');
+    };
+  }
+  
   var btnCreateModeCloud = document.getElementById('btn-create-mode-cloud');
-  if (btnCreateModeCloud) btnCreateModeCloud.onclick = function () { setCreateNetMode('cloud'); };
+  if (btnCreateModeCloud) {
+    btnCreateModeCloud.onclick = function () {
+      state.useCloudServer = true;
+      setCreateNetMode('cloud');
+      toast('تم اختيار الخادم السحابي (إنترنت)', 'success');
+    };
+  }
+
   var btnJoinModeLan = document.getElementById('btn-join-mode-lan');
-  if (btnJoinModeLan) btnJoinModeLan.onclick = function () { setJoinNetMode('lan'); };
+  if (btnJoinModeLan) {
+    btnJoinModeLan.onclick = function () {
+      state.useCloudServer = false;
+      setJoinNetMode('lan');
+      toast('تم اختيار LAN المحلي', 'info');
+    };
+  }
+
   var btnJoinModeCloud = document.getElementById('btn-join-mode-cloud');
-  if (btnJoinModeCloud) btnJoinModeCloud.onclick = function () { setJoinNetMode('cloud'); };
+  if (btnJoinModeCloud) {
+    btnJoinModeCloud.onclick = function () {
+      state.useCloudServer = true;
+      setJoinNetMode('cloud');
+      toast('تم اختيار الخادم السحابي (إنترنت)', 'success');
+    };
+  }
 
   // Live server detection under IP fields
   wireIpLiveCheck('create-ip-input', 'create-ip-status');
@@ -5615,7 +5372,6 @@
   if (btnOnlineCreate) btnOnlineCreate.onclick = function () {
     state._createNetMode = null;
     setCreateNetMode(null);
-    // reset panels
     var lanP = document.getElementById('create-lan-panel');
     var cloudP = document.getElementById('create-cloud-panel');
     if (lanP) lanP.classList.add('hidden');
@@ -5623,7 +5379,6 @@
     var doBtn = document.getElementById('btn-do-create');
     if (doBtn) { doBtn.disabled = true; doBtn.textContent = 'اختر LAN أو كلاودفير أولاً'; }
     showUI('create-room');
-    // quick probe localhost to fill detected IPs for LAN hint
     checkLanServer('127.0.0.1', function (ok, info) {
       if (ok && info && info.ips) state._detectedLanIps = info.ips;
     });
@@ -5674,7 +5429,6 @@
     }
     renderNetLobbyList();
     configureCustomUIForMode();
-    // Joiner: clothes only — no level control
     var levelBox = document.querySelector('.level-select-box');
     if (!isHost) {
       if (levelBox) levelBox.style.display = 'none';
@@ -5687,8 +5441,6 @@
       if (state.peer) { try { state.peer.destroy(); } catch (e) {} }
       var peerId = isHost ? ('sm_' + code) : undefined;
       showSyncLoading(isHost ? 'جاري فتح اللوبي...' : 'جاري الاتصال بالمضيف...');
-      // PeerJS: signaling عبر الخدمة العامة، والبيانات P2P مباشرة (LAN/Radmin أفضل)
-      // من غير إنترنت للإشارة الاتصال قد يفشل — بعد الاتصال الحركة تفضل P2P
       state.peer = new Peer(peerId, {
         debug: 0,
         config: {
@@ -5727,10 +5479,8 @@
       if (isHost) {
         state.peer.on('connection', function (conn) {
           state.connections.push(conn);
-          // keep last connection ref for compatibility
           state.connection = conn;
           conn.on('open', function () {
-            // join handled on data
           });
           conn.on('data', function (d) { handlePeerData(d, true, conn); });
           conn.on('close', function () {
@@ -5820,7 +5570,7 @@
 
   function setupLanLobby(isHost, code, ip) {
     state.playType = 'online';
-    state.useLan = true;
+    state.useLan = !state.useCloudServer;
     state.isHost = isHost;
     state.roomCode = code;
     state.lanIp = ip;
@@ -5841,12 +5591,13 @@
     clearRemoteMeshes();
     stopLanPoll();
 
-    document.getElementById('lobby-title').textContent = isHost ? '⚔️ لوبي القائد (LAN)' : '⚔️ لوبي المنضم (LAN)';
+    var serverType = state.useCloudServer ? '☁️ سحابي' : '🏠 LAN';
+    document.getElementById('lobby-title').textContent = isHost ? '⚔️ لوبي القائد (' + serverType + ')' : '⚔️ لوبي المنضم (' + serverType + ')';
     document.getElementById('lobby-code-display').style.display = 'block';
-    document.getElementById('lobby-code-display').textContent = 'الرمز: ' + code + ' | IP: ' + ip;
+    document.getElementById('lobby-code-display').textContent = 'الرمز: ' + code + ' | ' + (state.useCloudServer ? 'خادم: ' + state.cloudServerUrl : 'IP: ' + ip);
     document.getElementById('gamepad-hint').textContent = isHost
-      ? 'LAN جاهز — انتظر اللاعبين (شغّل lan_host.py)'
-      : 'جاري الانضمام عبر LAN...';
+      ? (state.useCloudServer ? 'خادم سحابي جاهز — انتظر اللاعبين' : 'LAN جاهز — انتظر اللاعبين')
+      : 'جاري الانضمام...';
 
     var levelBox = document.querySelector('.level-select-box');
     if (!isHost) {
@@ -5861,7 +5612,6 @@
     showScreen('lobby');
 
     if (isHost) {
-      // Register room FIRST, then start polling (prevents joiner race → false "room closed")
       var registerHost = function () {
         try {
           fetch(lanBaseUrl() + '/roommeta', {
@@ -5881,12 +5631,11 @@
         lanSend({ type: 'hostbeat', isHost: true, id: state.myNetId, name: state.playerName || 'القائد', players: 1 });
       };
       registerHost();
-      // Retry registration a few times so room is solid before friends join
       setTimeout(registerHost, 250);
       setTimeout(registerHost, 800);
       setTimeout(registerHost, 1800);
       startLanPoll();
-      toast('لوبي LAN/Radmin جاهز — أعطِ أصحابك الـ IP والرمز', 'success');
+      toast(state.useCloudServer ? 'لوبي سحابي جاهز — أعطِ أصحابك الرابط والرمز' : 'لوبي LAN/Radmin جاهز — أعطِ أصحابك الـ IP والرمز', 'success');
     } else {
       startLanPoll();
       var sendJoin = function () {
@@ -5901,8 +5650,8 @@
       setTimeout(sendJoin, 150);
       setTimeout(sendJoin, 700);
       setTimeout(sendJoin, 1600);
-      toast('جاري الانضمام عبر السيرفر...', 'info');
-      document.getElementById('gamepad-hint').textContent = 'متصل عبر LAN — بانتظار القائد';
+      toast(state.useCloudServer ? 'جاري الاتصال بالخادم السحابي...' : 'جاري الانضمام عبر السيرفر المحلي...', 'info');
+      document.getElementById('gamepad-hint').textContent = state.useCloudServer ? 'متصل بالسحابة — بانتظار القائد' : 'متصل عبر LAN — بانتظار القائد';
       document.getElementById('btn-start-game').disabled = true;
       document.getElementById('btn-start-game').textContent = 'في انتظار القائد...';
     }
@@ -5919,26 +5668,36 @@
       ip = (document.getElementById('create-ip-input') && document.getElementById('create-ip-input').value || '127.0.0.1').trim();
     } else {
       ip = (document.getElementById('create-cloud-input') && document.getElementById('create-cloud-input').value || '').trim();
+      if (ip) state.cloudServerUrl = ip;
     }
     if (!code || code.length < 2) { toast('اكتب رمز صالح', 'error'); return; }
-    if (!ip) { toast(mode === 'lan' ? 'اكتب IP المحلي أو Radmin' : 'الصق رابط الكلاودفير', 'error'); return; }
+    if (!ip) { toast(mode === 'lan' ? 'اكتب IP المحلي أو Radmin' : 'الصق رابط الخادم السحابي', 'error'); return; }
     if (!createZipReady) {
       toast('ارفع الملف الشامل أولاً', 'error');
       if (createUploadInput) createUploadInput.click();
       return;
     }
-    toast(mode === 'lan' ? 'جاري التعرف على الخادم (LAN/Radmin)...' : 'جاري التعرف على الخادم (كلاودفير)...', 'info');
+    
+    // تعيين نوع الخادم
+    if (mode === 'cloud') {
+      state.useCloudServer = true;
+      if (ip) state.cloudServerUrl = ip;
+    } else {
+      state.useCloudServer = false;
+    }
+    
+    toast(mode === 'lan' ? 'جاري التعرف على الخادم (LAN/Radmin)...' : 'جاري التعرف على الخادم السحابي...', 'info');
     probeServerAndShow(ip, statusId, function (ok, info) {
       if (!ok) {
         toast(mode === 'lan'
-          ? '✗ مش واصل — شغّل python lan_host.py وتأكد من IP (Radmin أو LAN)'
-          : '✗ مش واصل — تأكد من python lan_host.py + cloudflared tunnel', 'error');
+          ? '✗ مش واصل — تأكد من تشغيل الخادم وتأكد من IP (Radmin أو LAN)'
+          : '✗ مش واصل — تأكد من تشغيل الخادم السحابي (Python + Cloudflare أو Railway)', 'error');
         return;
       }
       toast('✓ تم التعرف على وجود الخادم', 'success');
       if (info && info.ips) state._detectedLanIps = info.ips;
       setupLanLobby(true, code, ip);
-      toast(mode === 'lan' ? 'لوبي LAN/Radmin جاهز — أعطِ أصحابك الـ IP والرمز' : 'لوبي كلاودفير جاهز — أعطِ الرابط والرمز', 'success');
+      toast(mode === 'lan' ? 'لوبي LAN/Radmin جاهز — أعطِ أصحابك الـ IP والرمز' : 'لوبي سحابي جاهز — أعطِ الرابط والرمز', 'success');
     });
   };
 
@@ -6024,18 +5783,27 @@
     var ip = getJoinServerAddress();
     var statusId = mode === 'lan' ? 'join-ip-status' : 'join-cloud-status';
     if (!code || code.length < 2) { toast('اكتب رمز الروم أو اختر من القائمة', 'error'); return; }
-    if (!ip) { toast(mode === 'lan' ? 'اكتب IP جهاز القائد (LAN أو Radmin)' : 'الصق رابط الكلاودفير', 'error'); return; }
+    if (!ip) { toast(mode === 'lan' ? 'اكتب IP جهاز القائد (LAN أو Radmin)' : 'الصق رابط الخادم السحابي', 'error'); return; }
     if (!joinZipReady) {
       toast('ارفع الملف الشامل أولاً', 'error');
       if (joinUploadInput) joinUploadInput.click();
       return;
     }
-    toast(mode === 'lan' ? 'جاري التعرف على الخادم (LAN/Radmin)...' : 'جاري التعرف على الخادم...', 'info');
+    
+    // تعيين نوع الخادم
+    if (mode === 'cloud') {
+      state.useCloudServer = true;
+      if (ip) state.cloudServerUrl = ip;
+    } else {
+      state.useCloudServer = false;
+    }
+    
+    toast(mode === 'lan' ? 'جاري التعرف على الخادم (LAN/Radmin)...' : 'جاري التعرف على الخادم السحابي...', 'info');
     probeServerAndShow(ip, statusId, function (ok) {
       if (!ok) {
         toast(mode === 'lan'
-          ? '✗ مش واصل — تأكد إن القائد فاتح python lan_host.py وإنكم على نفس الشبكة / Radmin'
-          : '✗ مش واصل — تأكد من الرابط وإن القائد فاتح Python + tunnel', 'error');
+          ? '✗ مش واصل — تأكد إن القائد فاتح الخادم وإنكم على نفس الشبكة / Radmin'
+          : '✗ مش واصل — تأكد من الرابط وإن الخادم السحابي شغال', 'error');
         return;
       }
       toast('✓ تم التعرف على وجود الخادم', 'success');
@@ -6060,8 +5828,8 @@
   }
 
   // Pause system — per-player in split screen
-  var gpMenuFocus = 0; // index into focusable elements
-  var gpMenuMode = 'pause'; // 'pause' | 'settings' | 'cam'
+  var gpMenuFocus = 0;
+  var gpMenuMode = 'pause';
 
   function getPauseFocusables() {
     if (gpMenuMode === 'settings' || gpMenuMode === 'cam') {
@@ -6072,7 +5840,6 @@
       var camBtn = document.getElementById('btn-cam-settings');
       var back = document.getElementById('btn-settings-back');
       if (vol) list.push({ el: vol, type: 'range' });
-      // Show only relevant sens for current pause owner
       if (state.pauseOwner === 0 && sens) list.push({ el: sens, type: 'range' });
       if (state.pauseOwner === 1 && gps) list.push({ el: gps, type: 'range' });
       if (gpMenuMode === 'cam' || (document.getElementById('cam-settings') && !document.getElementById('cam-settings').classList.contains('hidden'))) {
@@ -6147,7 +5914,6 @@
         if (!isNaN(min)) val = Math.max(min, val);
         if (!isNaN(max)) val = Math.min(max, val);
         cur.el.value = val;
-        // trigger input handler
         cur.el.dispatchEvent(new Event('input', { bubbles: true }));
       }
     }
@@ -6187,7 +5953,6 @@
     if (cd) cd.value = s.camDist;
     if (ch) ch.value = s.camHeight;
     if (cs) cs.value = s.camSide;
-    // Labels: hide irrelevant sensitivity for this player
     var sensRow = sens ? sens.closest('.setting-row') : null;
     var gpRow = gps ? gps.closest('.setting-row') : null;
     if (sensRow) sensRow.style.display = playerIdx === 0 ? '' : 'none';
@@ -6239,7 +6004,6 @@
     document.getElementById('settings-panel').classList.add('hidden');
     var cam = document.getElementById('cam-settings');
     if (cam) cam.classList.add('hidden');
-    // clear outlines
     getPauseFocusables().forEach(function (it) {
       if (it.el) { it.el.style.outline = ''; it.el.style.outlineOffset = ''; }
     });
@@ -6271,7 +6035,6 @@
     updateGpMenuFocus();
   };
 
-  // Live settings — apply to the player who opened the menu only
   function bindSettings() {
     var vol = document.getElementById('set-volume');
     var sens = document.getElementById('set-sens');
@@ -6314,7 +6077,6 @@
       e.preventDefault();
       e.stopPropagation();
       if (state.paused) {
-        // Only close if this is P0's menu or full
         if (state.pauseOwner === 0 || state.playType !== 'split') closePause();
         return;
       }
@@ -6395,7 +6157,6 @@
     if (search) {
       search.oninput = function () { populateSidebar(search.value); };
     }
-    // Name entry
     var btnSaveName = document.getElementById('btn-save-player-name');
     if (btnSaveName) btnSaveName.onclick = savePlayerNameFromUI;
     var nameInp = document.getElementById('player-name-input');
@@ -6407,9 +6168,7 @@
     var btnChangeName = document.getElementById('btn-change-name');
     if (btnChangeName) btnChangeName.onclick = function () { showNameEntry(true); };
 
-    // Update hideAllScreens list if needed - name entry is separate
     showNameEntry(false);
-    // restore graphics preference
     try {
       var g = parseInt(localStorage.getItem('sm_graphics') || '3', 10);
       applyGraphicsQuality(g);
